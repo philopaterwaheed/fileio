@@ -10,7 +10,8 @@ fn main() {
     let mut current_dir = std::env::current_dir().expect("Failed to get current directory"); // get the dir
 
     let dirs = dirs::get_dirs(& current_dir).unwrap();
-    for &e in dirs.unwrap{
+    for e in dirs{
+
         if let Ok(e) = e {
             println!("{}", e.file_name().to_string_lossy());
         }

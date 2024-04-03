@@ -1,8 +1,12 @@
 use std::io;
 use std::fs;
-use std::env;
+use std::{env,process::Command};
 use std::path::{Path,PathBuf};
-   pub fn create_dir(path_str: &str) -> Result<String, io::Error> {
+    pub fn str_to_path (str : &str)-> &Path {
+        let path = Path::new(str);
+        path
+    }
+    pub fn create_dir(path_str: &str) -> Result<String, io::Error> {
         let path = Path::new(path_str);
         fs::create_dir(&path)?;
         path.to_str()
@@ -17,11 +21,27 @@ use std::path::{Path,PathBuf};
             None
         }
     }
-    pub fn exit_to_dir (path : &std::path::PathBuf){
+    pub fn change_to_dir (path : &Path){
             if let Err(err) = env::set_current_dir(path) {
             eprintln!("Error: {}", err);
         } else {
             println!("Changed to target_directory");
         }
 
+    }
+    pub fn start_shell_in_dir(dir: &str) -> io::Result<()> {
+        let mut cmd = Command::new("sh"); // Use "cmd" for Windows
+
+        // Set the working directory to the specified directory
+        cmd.arg("-c").arg(format!("cd \"{}\" && exec $SHELL", dir)); // Use "/D" for Windows
+
+        // Execute the command
+        let status = cmd.status()?;
+
+        if !status.success() {
+            eprintln!("Failed to start shell in {}", dir);
+            return Err(io::Error::new(io::ErrorKind::Other, "Command failed"));
+        }
+
+        Ok(())
     }
