@@ -1,3 +1,4 @@
+pub mod dirs {
 use std::io;
 use std::fs;
 use std::{env,process::Command};
@@ -45,3 +46,4 @@ use std::path::{Path,PathBuf};
 
         Ok(())
     }
+}

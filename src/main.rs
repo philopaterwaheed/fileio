@@ -1,6 +1,7 @@
-mod dirs;
+mod Dirs;
 mod files;
 
+use Dirs::dirs;
 use ncurses::* ; 
 use std::io::{self, Write};
 use std::fs;
