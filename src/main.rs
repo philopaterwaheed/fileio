@@ -1,7 +1,8 @@
 mod Dirs;
-mod files;
+mod Files;
 
 use Dirs::dirs;
+use Files::files;
 use ncurses::* ; 
 use std::io::{self, Write};
 use std::fs;
@@ -10,13 +11,13 @@ fn main() {
     // Start in the current directory
     let mut current_dir = std::env::current_dir().expect("Failed to get current directory"); // get the dir
 
-    let dirs = dirs::get_dirs(& current_dir).unwrap();
-    for e in dirs{
-
-        if let Ok(e) = e {
-            println!("{}", e.file_name().to_string_lossy());
-        }
-    }
+    // let dirs = dirs::get_dirs(& current_dir).unwrap();
+    // for e in dirs{
+    //
+    //     if let Ok(e) = e {
+    //         println!("{}", e.file_name().to_string_lossy());
+    //     }
+    // }
     // loop {
     //     print_files(&current_dir);
     //
@@ -45,4 +46,9 @@ fn main() {
 
 fn print_files(path: &std::path::PathBuf) { // edit we will just display it on ncurses
 }
+fn copy_file (file : files::File ,  dircetion_dir : dirs::Directory )-> Result<files::File, io::Error>
+{
+    fs::copy(file.path, dircetion_dir.path)?;
+    files::File.create_file(file.name, )
 
+}
