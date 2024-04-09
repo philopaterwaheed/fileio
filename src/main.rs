@@ -1,10 +1,8 @@
 mod Dirs;
-mod Paths;
 mod Files;
 
 use Dirs::dirs;
 use Files::files;
-use Paths::paths;
 use ncurses::* ; 
 use std::io::{self, Write};
 use std::fs;
@@ -15,7 +13,7 @@ fn main() {
 
     // let x = dirs::Directory::new("/home/philosan/Dev/rust/fileio/src/main.rs");
     let y = dirs::Directory::new("/home/philosan/").unwrap();
-    let z = files::File::new("main.rs" , paths::str_to_path("/home/philosan/Dev/rust/fileio/src/main.rs")).unwrap();
+    let z = files::File::new("main.rs" , Path::new("/home/philosan/Dev/rust/fileio/src/main.rs")).unwrap();
     copy_file(&z , &y);
 
     // let dirs = dirs::get_dirs(& current_dir).unwrap();
