@@ -13,8 +13,8 @@ fn main() {
 
     // let x = dirs::Directory::new("/home/philosan/Dev/rust/fileio/src/main.rs");
     let y = dirs::Directory::new("/home/philosan/").unwrap();
-    let z = files::File::new("main.rs" , Path::new("/home/philosan/Dev/rust/fileio/src/main.rs")).unwrap();
-    copy_file(&z , &y);
+    let z = files::File::new("pop" , Path::new("/home/philosan/junk/pop")).unwrap();
+    move_file(z , &y);
 
     // let dirs = dirs::get_dirs(& current_dir).unwrap();
     // for e in dirs{
@@ -51,10 +51,17 @@ fn main() {
 
 fn print_files(path: &std::path::PathBuf) { // edit we will just display it on ncurses
 }
-fn copy_file (file : &files::File ,  dircetion_dir : &dirs::Directory )-> Result<files::File, io::Error>
+fn copy_file (file : files::File ,  dircetion_dir : &dirs::Directory )-> Result<files::File, io::Error>
 {
     let new_name = file.name.clone () ; 
     fs::copy(file.path.as_path(), dircetion_dir.path.join(new_name.as_str()).as_path())?;
+    let out_file =  files::File::new(new_name.as_str(),dircetion_dir.path.join(new_name.as_str()).as_path());
+    out_file
+}
+fn move_file (file : files::File ,  dircetion_dir : &dirs::Directory )-> Result<files::File, io::Error>
+{
+    let new_name = file.name.clone () ; 
+    fs::rename(file.path.as_path(), dircetion_dir.path.join(new_name.as_str()).as_path())?;
     let out_file =  files::File::new(new_name.as_str(),dircetion_dir.path.join(new_name.as_str()).as_path());
     out_file
 }
