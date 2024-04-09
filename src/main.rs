@@ -6,6 +6,7 @@ use Files::files;
 use ncurses::* ; 
 use std::io::{self, Write};
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 fn main() {
     // Start in the current directory
@@ -14,7 +15,7 @@ fn main() {
     // let x = dirs::Directory::new("/home/philosan/Dev/rust/fileio/src/main.rs");
     let y = dirs::Directory::new("/home/philosan/").unwrap();
     let z = files::File::new("pop" , Path::new("/home/philosan/junk/pop")).unwrap();
-    move_file(z , &y);
+    rename_file(z , "philo.lolo");
 
     // let dirs = dirs::get_dirs(& current_dir).unwrap();
     // for e in dirs{
@@ -64,4 +65,22 @@ fn move_file (file : files::File ,  dircetion_dir : &dirs::Directory )-> Result<
     fs::rename(file.path.as_path(), dircetion_dir.path.join(new_name.as_str()).as_path())?;
     let out_file =  files::File::new(new_name.as_str(),dircetion_dir.path.join(new_name.as_str()).as_path());
     out_file
+}
+fn rename_file (file : files::File ,  str : &str)-> Result<files::File, io::Error>
+{
+    let new_path = file.path.parent().unwrap().join(str); 
+    fs::rename(file.path.as_path(), new_path.clone())?;
+    let out_file =  files::File::new(str,new_path.as_path());
+    out_file
+}
+fn remove_file (file : files::File )-> io::Result<()>
+{
+    fs::remove_file(file.path.as_path())?;
+    Ok(())
+}
+fn file_perm_ch (file : files::File , permissions: u32 )->Result<files::File, io::Error>
+{
+    let new_permissions = fs::Permissions::from_mode(permissions);
+    fs::set_permissions(&file.path, new_permissions)?;
+    Ok(file)
 }
