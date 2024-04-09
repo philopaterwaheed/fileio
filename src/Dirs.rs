@@ -9,25 +9,20 @@ pub mod dirs {
     }
     
     impl Directory {
-        pub fn create_dir(path_str: &str) -> Result<Directory, io::Error> {
-            let path = Path::new(path_str);
-            let _p = fs::create_dir(&path)?;
-            Ok(Directory {
-                path : path.to_owned() , 
-            })
-        }
-        pub fn get_contains(&self)-> Option <fs::ReadDir> {
-            if let Ok(entries) = fs::read_dir(self.path) {
+         pub fn new(path_str: &str) -> Result<Directory, io::Error> {
+            let path = PathBuf::from(path_str);
+            if !path.exists() {
+                fs::create_dir_all(&path)?;
+            }
+            Ok(Directory { path })
+        }        pub fn get_contains(path : &Path)-> Option <fs::ReadDir> {
+            if let Ok(entries) = fs::read_dir(path) {
                 Some(entries)
             }
             else {
                 None
             }
     }
-    }
-    pub fn str_to_path (str : &str)-> &Path {
-        let path = Path::new(str);
-        path
     }
     pub fn change_to_dir (path : &Path){
             if let Err(err) = env::set_current_dir(path) {

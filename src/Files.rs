@@ -8,13 +8,18 @@ pub mod files {
         pub name: String,
     }
     impl File {
-        pub fn create_file(name : &str , path_str: &str) ->  Result<File, io::Error> {
+        pub fn new(name : &str , path_str: &Path) ->  Result<File, io::Error> {
             let path = Path::new(path_str);
-            let _f = fs::File::create(&path)?;
-            
-            Ok(File{
-                path : path.to_owned(),
+        if path.exists() {
+          return  Ok(File{
                 name : name.to_owned(),
+                path : path.to_owned(),
+            })
+        } 
+            let _f = fs::File::create(&path)?;
+            Ok(File{
+                name : name.to_owned(),
+                path : path.to_owned(),
             })
         }
     }
