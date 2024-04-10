@@ -17,37 +17,6 @@ fn main() {
     let mut z = dirs::Directory::new("c#" , Path::new("/home/philosan/Dev/c#/")).unwrap();
     let mut x = files::File::new("hello" , Path::new("/home/philosan/Dev/c#/hello")).unwrap();
     move_dir(&z,&y);
-    // let dirs = dirs::get_dirs(& current_dir).unwrap();
-    // for e in dirs{
-    //
-    //     if let Ok(e) = e {
-    //         println!("{}", e.file_name().to_string_lossy());
-    //     }
-    // }
-    // loop {
-    //     print_files(&current_dir);
-    //
-    //     print!(">> ");
-    //     io::stdout().flush().unwrap();
-    //     
-    //     let mut input = String::new();
-    //     io::stdin().read_line(&mut input).expect("Failed to read line");
-    //
-    //     let input = input.trim();
-    //
-    //     if input == "quit" {
-    //         break;
-    //     } else if input == "cd .." {
-    //         current_dir.pop();
-    //     } else {
-    //         let new_dir = current_dir.join(input);
-    //         if new_dir.is_dir() {
-    //             current_dir = new_dir;
-    //         } else {
-    //             println!("Not a valid directory or command");
-    //         }
-    //     }
-    // }
 }
 
 fn print_files(path: &std::path::PathBuf) { // edit we will just display it on ncurses
