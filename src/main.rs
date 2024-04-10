@@ -1,4 +1,4 @@
-mod Dirs;
+mod Dirs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;
 mod Files;
 
 use Dirs::dirs;
