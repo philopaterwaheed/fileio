@@ -44,6 +44,21 @@ fn handle_events() -> io::Result<bool> {
     Ok(false)
 }
 fn ui(frame: &mut Frame) {
+ let d = dirs::Directory::new(Path::new("/home/philosan/junk/poper/slstatus")).unwrap();
+ let x = d.prev().unwrap();
+
+ let d_c = d.get_contains().unwrap().filter_map(|entry| {
+  entry.ok().and_then(|e|
+    e.path().file_name()
+    .and_then(|n| n.to_str().map(|s| String::from(s)))
+  )
+}).collect::<Vec<String>>();;
+ let d_x = x.get_contains().unwrap().filter_map(|entry| {
+  entry.ok().and_then(|e|
+    e.path().file_name()
+    .and_then(|n| n.to_str().map(|s| String::from(s)))
+  )
+}).collect::<Vec<String>>();;
  let main_layout = Layout::new(
         Direction::Vertical,
         [
@@ -67,18 +82,32 @@ fn ui(frame: &mut Frame) {
         [Constraint::Percentage(50), Constraint::Percentage(50),Constraint::Percentage(50)],
     )
     .split(main_layout[1]);
-    frame.render_widget(
-        Block::default().borders(Borders::ALL).title("Prev"),
-        inner_layout[0],
-    );
-    frame.render_widget(
-        Block::default().borders(Borders::ALL).title("Curr"),
-        inner_layout[1],
-    );
+    let mut list_state = ListState::default();
+    list_state.select(Some(0)); // Select the first item initially
+    frame.render_stateful_widget(
+        List::new(d_x).block(Block::default().title("Prev").borders(Borders::ALL))
+        .style(Style::new().blue())
+        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true)
+        .direction(ListDirection::TopToBottom)
+        .highlight_spacing(HighlightSpacing::Always),
+        inner_layout[0],&mut list_state
+     );
+    frame.render_stateful_widget(
+        List::new(d_c).block(Block::default().title("Curr").borders(Borders::ALL))
+        .style(Style::new().blue())
+        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true)
+        .direction(ListDirection::TopToBottom)
+        .highlight_spacing(HighlightSpacing::Always),
+        inner_layout[1],&mut list_state
+     );
     frame.render_widget(
         Block::default().borders(Borders::ALL).title("Next"),
         inner_layout[2],
-    );
+    ); 
 }
 
 fn print_files(path: &std::path::PathBuf) { // edit we will just display it on ncurses
@@ -90,7 +119,6 @@ fn copy_file(file: files::File, dircetion_dir: &dirs::Directory) -> Result<files
         dircetion_dir.path.join(new_name.as_str()).as_path(),
     )?;
     let out_file = files::File::new(
-        new_name.as_str(),
         dircetion_dir.path.join(new_name.as_str()).as_path(),
     );
     out_file
@@ -102,7 +130,6 @@ fn move_file(file: files::File, dircetion_dir: &dirs::Directory) -> Result<files
         dircetion_dir.path.join(new_name.as_str()).as_path(),
     )?;
     let out_file = files::File::new(
-        new_name.as_str(),
         dircetion_dir.path.join(new_name.as_str()).as_path(),
     );
     out_file
@@ -114,7 +141,7 @@ fn copy_dir(
 ) -> Result<dirs::Directory, io::Error> {
     let new_name = source_dir.name.clone();
     let new_path = &dircetion_dir.path.join(&new_name);
-    let dir = dirs::Directory::new(new_name.as_str(), new_path);
+    let dir = dirs::Directory::new( new_path);
 
     for entry in fs::read_dir(source_dir.path.to_owned())? {
         let entry = entry?;
@@ -122,9 +149,9 @@ fn copy_dir(
         if ty.is_dir() {
             let entry_name = entry.file_name().into_string().ok().unwrap();
             copy_dir(
-                &dirs::Directory::new(entry_name.to_owned().as_str(), entry.path().as_path())
+                &dirs::Directory::new(entry.path().as_path())
                     .unwrap(),
-                &dirs::Directory::new(entry_name.to_owned().as_str(), new_path.as_path()).unwrap(),
+                &dirs::Directory::new(new_path.as_path()).unwrap(),
             )?;
         } else {
             fs::copy(entry.path(), new_path.join(entry.file_name()))?;
@@ -136,17 +163,16 @@ fn copy_dir(
 fn move_dir(source_dir: dirs::Directory, dircetion_dir: &dirs::Directory)-> Result<dirs::Directory, io::Error> {
     let new_name = source_dir.name.clone();
     let new_path = &dircetion_dir.path.join(&new_name);
-    let dir = dirs::Directory::new(new_name.as_str(), new_path);
+    let dir = dirs::Directory::new(new_path);
 
     for entry in fs::read_dir(source_dir.path.to_owned())? {
         let entry = entry?;
         let ty = entry.file_type()?;
         if ty.is_dir() {
-            let entry_name = entry.file_name().into_string().ok().unwrap();
             move_dir(
-                 dirs::Directory::new(entry_name.to_owned().as_str(), entry.path().as_path())
+                 dirs::Directory::new(entry.path().as_path())
                     .unwrap(),
-                &dirs::Directory::new(entry_name.to_owned().as_str(), new_path.as_path()).unwrap(),
+                &dirs::Directory::new(new_path.as_path()).unwrap(),
             )?;
         } else {
             fs::rename(entry.path(), new_path.join(entry.file_name()))?;

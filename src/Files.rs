@@ -9,17 +9,17 @@ pub mod files {
         pub name: String,
     }
     impl File {
-        pub fn new(name: &str, path_str: &Path) -> Result<File, io::Error> {
+        pub fn new(path_str: &Path) -> Result<File, io::Error> {
             let path = Path::new(path_str);
             if path.exists() {
                 return Ok(File {
-                    name: name.to_owned(),
+                    name: path.file_name().unwrap().to_str().unwrap().to_owned(),
                     path: path.to_owned(),
                 });
             }
             let _f = fs::File::create(&path)?;
             Ok(File {
-                name: name.to_owned(),
+                name: path.file_name().unwrap().to_str().unwrap().to_owned(),
                 path: path.to_owned(),
             })
         }

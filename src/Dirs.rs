@@ -11,13 +11,11 @@ pub mod dirs {
     }
     
     impl Directory {
-        pub fn new(name : &str , path_str: &Path) -> Result<Directory, io::Error> {
-            let path = PathBuf::from(path_str);
+        pub fn new(path: &Path) -> Result<Directory, io::Error> {
             if !path.exists() {
                 fs::create_dir_all(&path)?;
-                
             }
-            Ok(Directory { path ,name : name.to_owned()})
+            Ok(Directory { path: path.to_owned(),name : path.file_name().unwrap().to_str().unwrap().to_owned()})
         }        
         pub fn get_contains(&self)-> Option <fs::ReadDir> {
             if let Ok(entries) = fs::read_dir(self.path.as_path()) {
@@ -60,6 +58,20 @@ pub mod dirs {
 
             }
             Ok(())
+        }
+        pub fn prev(&self) ->   Result<Directory, io::Error>{
+            let temp = self.path.clone();
+            let new_path = temp.parent();
+            match new_path {
+                Some(x) => {
+                    Directory::new(new_path.to_owned().unwrap())
+                }
+                None =>{
+                   let error_message = format!("No parent directory for {}", self.path.display());
+                    Err(io::Error::new(io::ErrorKind::NotFound, error_message))
+                }
+
+            }
         }
     }
     pub fn change_to_dir (dir : Directory){
