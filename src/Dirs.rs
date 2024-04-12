@@ -45,6 +45,22 @@ pub mod dirs {
             self.path = new_path.as_path().to_owned();
             Ok(())
         }
+        pub fn up(&mut self) -> io::Result<()> {
+            let temp = self.path.clone();
+            let new_path = temp.parent();
+            match new_path {
+                Some(x) => {
+                    let new_name = x.file_name();
+                    self.path = x.to_owned();
+                    self.name = new_name.unwrap().to_str().unwrap().to_owned();
+                }
+                None =>{
+                    ()
+                }
+
+            }
+            Ok(())
+        }
     }
     pub fn change_to_dir (dir : Directory){
             if let Err(err) = env::set_current_dir(dir.path) {

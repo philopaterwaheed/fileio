@@ -14,9 +14,8 @@ fn main() {
 
     // let x = dirs::Directory::new("/home/philosan/Dev/rust/fileio/src/main.rs");
     let y = dirs::Directory::new("philosan", Path::new("/home/philosan/")).unwrap();
-    let mut z = dirs::Directory::new("pop", Path::new("/home/philosan/junk/pop/")).unwrap();
-    z.rename("philo");
-    z.perm_ch(444);
+    let mut z = dirs::Directory::new("pop", Path::new("/")).unwrap();
+
 }
 
 fn print_files(path: &std::path::PathBuf) { // edit we will just display it on ncurses
