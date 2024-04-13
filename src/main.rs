@@ -5,18 +5,27 @@ use::ncurses::*;
 
 use crossterm::{
     event::{self, Event, KeyCode},
+    cursor::Show,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand,
 };
 use ratatui::{prelude::*, widgets::*};
 use std::fs;
 use std::io::{self};
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::{Path};
 use Dirs::dirs;
 use Files::files;
-
+ 
+static mut CLEAR :bool = false ; 
 fn main() -> io::Result<()>{
+
+    let curr_dir : &mut dirs::Directory = &mut dirs::Directory::get_env_dir().unwrap();
+    let prev_sel :usize = 0;
+    let sel:usize  = 0 ; 
+
+    let tup = &mut (prev_sel,curr_dir,sel);
+
+    // let tup: &mut (usize , &mut dirs::Directory ,usize) = (prev_sel,curr_dir,sel);
 
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
@@ -24,41 +33,68 @@ fn main() -> io::Result<()>{
 
     let mut should_quit = false;
     while !should_quit {
-        terminal.draw(ui)?;
-        should_quit = handle_events()?;
+        terminal.draw(|f|ui(f,tup))?;
+        should_quit = handle_events(tup)?;
+        unsafe{
+            if CLEAR{
+                enable_raw_mode();
+                terminal.clear();
+                CLEAR=false;
+            }
+        }
     }
 
     disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
+    std::io::stdout().execute(Show)?;
     Ok(())
 }
 
-fn handle_events() -> io::Result<bool> {
+fn handle_events(selections : &mut (usize , &mut dirs::Directory ,usize)) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
             if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') {
                 return Ok(true);
             }
+            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down ||key.code == KeyCode::Char('j'){
+                if selections.2 + 1 < selections.1.contains_count{
+                    selections.2 = selections.2 + 1 ;
+                }
+            }
+            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up ||key.code == KeyCode::Char('k'){
+                if selections.2 > 0 {
+                    selections.2 = selections.2 - 1 ;
+                }
+            }
+            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Left ||key.code == KeyCode::Char('h'){
+                let _ = selections.1.up();
+                selections.2 = selections.0;
+            }
+            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Right ||key.code == KeyCode::Char('l'){
+                if selections.1. contains_count != 0 {
+                    let _ = selections.1.down(selections.2);
+                    selections.0 = selections.2;
+                    selections.2 = 0;
+                }
+                
+            }
+            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter ||key.code == KeyCode::Char('S'){
+                let _ = selections.1.start_shell_in_dir();
+                unsafe{
+                    CLEAR = true;
+                }
+            }
         }
     }
     Ok(false)
 }
-fn ui(frame: &mut Frame) {
- let d = dirs::Directory::new(Path::new("/home/philosan/junk/poper/slstatus")).unwrap();
- let x = d.prev().unwrap();
 
- let d_c = d.get_contains().unwrap().filter_map(|entry| {
-  entry.ok().and_then(|e|
-    e.path().file_name()
-    .and_then(|n| n.to_str().map(|s| String::from(s)))
-  )
-}).collect::<Vec<String>>();;
- let d_x = x.get_contains().unwrap().filter_map(|entry| {
-  entry.ok().and_then(|e|
-    e.path().file_name()
-    .and_then(|n| n.to_str().map(|s| String::from(s)))
-  )
-}).collect::<Vec<String>>();;
+fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize)) {
+ let curr = &selections.1;
+ let prev = curr.prev();
+ selections.0 = curr.find_index();
+
+ let (current_contains_pathes,current_contains_strings)= curr.vec_of_contains().unwrap();
  let main_layout = Layout::new(
         Direction::Vertical,
         [
@@ -82,35 +118,37 @@ fn ui(frame: &mut Frame) {
         [Constraint::Percentage(50), Constraint::Percentage(50),Constraint::Percentage(50)],
     )
     .split(main_layout[1]);
-    let mut list_state = ListState::default();
-    list_state.select(Some(0)); // Select the first item initially
-    frame.render_stateful_widget(
-        List::new(d_x).block(Block::default().title("Prev").borders(Borders::ALL))
-        .style(Style::new().blue())
-        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-        .highlight_symbol(">>")
-        .repeat_highlight_symbol(true)
-        .direction(ListDirection::TopToBottom)
-        .highlight_spacing(HighlightSpacing::Always),
-        inner_layout[0],&mut list_state
-     );
-    frame.render_stateful_widget(
-        List::new(d_c).block(Block::default().title("Curr").borders(Borders::ALL))
-        .style(Style::new().blue())
-        .highlight_style(Style::default().add_modifier(Modifier::ITALIC))
-        .highlight_symbol(">>")
-        .repeat_highlight_symbol(true)
-        .direction(ListDirection::TopToBottom)
-        .highlight_spacing(HighlightSpacing::Always),
-        inner_layout[1],&mut list_state
-     );
-    frame.render_widget(
-        Block::default().borders(Borders::ALL).title("Next"),
-        inner_layout[2],
-    ); 
+    let mut sel = ListState::default();
+    let mut next_sel = ListState::default();
+    let mut prev_sel = ListState::default();
+    sel.select(Some(selections.2)); // Select the first item initially
+    prev_sel.select(Some(selections.0)); // Select the first item initially
+    if let Ok(d) = prev  {
+        let prev_c = d.vec_of_contains().unwrap().1;
+
+        render_list(frame, inner_layout[0],prev_c , &mut prev_sel,"Prev");
+    }
+    render_list(frame, inner_layout[1],current_contains_strings , &mut sel,format!("Curr").as_str());
+    if  !current_contains_pathes.len() == 0 {
+        if current_contains_pathes[selections.2].is_dir(){
+            let next_c = dirs::Directory::new(current_contains_pathes[selections.2].as_path()).unwrap().vec_of_contains().unwrap().1;
+            render_list(frame, inner_layout[2],next_c , &mut next_sel,"next");
+
+        }
+    }
 }
 
-fn print_files(path: &std::path::PathBuf) { // edit we will just display it on ncurses
+fn render_list (frame : &mut Frame ,rect : Rect ,contains : Vec<String>,state:&mut ListState, title : &str) { 
+    frame.render_stateful_widget(
+        List::new(contains).block(Block::default().title(title).borders(Borders::ALL))
+        .style(Style::new().blue())
+        .highlight_style(Style::default().add_modifier(Modifier::BOLD).add_modifier(Modifier::UNDERLINED))
+        .highlight_symbol(">>")
+        .repeat_highlight_symbol(true)
+        .direction(ListDirection::TopToBottom)
+        .highlight_spacing(HighlightSpacing::Always),
+        rect,state
+     );
 }
 fn copy_file(file: files::File, dircetion_dir: &dirs::Directory) -> Result<files::File, io::Error> {
     let new_name = file.name.clone();
