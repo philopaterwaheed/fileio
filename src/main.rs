@@ -129,7 +129,7 @@ fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize)
         render_list(frame, inner_layout[0],prev_c , &mut prev_sel,"Prev");
     }
     render_list(frame, inner_layout[1],current_contains_strings , &mut sel,format!("Curr").as_str());
-    if  !current_contains_pathes.len() == 0 {
+     if  current_contains_pathes.len() != 0 {
         if current_contains_pathes[selections.2].is_dir(){
             let next_c = dirs::Directory::new(current_contains_pathes[selections.2].as_path()).unwrap().vec_of_contains().unwrap().1;
             render_list(frame, inner_layout[2],next_c , &mut next_sel,"next");
