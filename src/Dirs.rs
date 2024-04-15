@@ -34,7 +34,7 @@ pub mod dirs {
                 None
             }
         }  
-        pub fn remove(self) -> io::Result<()> {
+        pub fn remove(&self) -> io::Result<()> {
             fs::remove_dir_all(self.path.as_path())?;
             Ok(())
         }

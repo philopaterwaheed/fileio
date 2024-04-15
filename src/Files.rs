@@ -9,6 +9,7 @@ pub mod files {
         pub name: String,
     }
     impl File {
+        pub fn File(path:&Path){}
         pub fn new(path_str: &Path) -> Result<File, io::Error> {
             let path = Path::new(path_str);
             if path.exists() {
@@ -28,7 +29,7 @@ pub mod files {
             fs::set_permissions(&self.path, new_permissions)?;
             Ok(())
         }
-        pub fn remove(self) -> io::Result<()> {
+        pub fn remove(&self) -> io::Result<()> {
             fs::remove_file(self.path.as_path())?;
             Ok(())
         }
