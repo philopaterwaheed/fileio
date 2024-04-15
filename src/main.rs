@@ -34,20 +34,24 @@ fn main() -> io::Result<()>{
     let selected :  Entry  = Entry::None;
 
     let selections = &mut (prev_sel,curr_dir,sel,selected);
-    let constants  = &mut selections.1.vec_of_contains().unwrap();
+    let contains  = &mut selections.1.vec_of_contains().unwrap();
 
+    let mut input_mode : bool = false; //to now if we are inputing 
+    let mut input_string = &mut String ::new();// the string the user will enter 
+    let mut opera_code : usize = 0 ; //the code of the operation the user will do
+    let mut input_state = (&mut input_mode, input_string , &mut opera_code);
 
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 
     let mut should_quit = false;
-    update(selections ,constants);
+    update(selections ,contains);
     while !should_quit {
-        terminal.draw(|f|ui(f,selections , constants))?;
-        should_quit = handle_events(selections, constants)?;
+        terminal.draw(|f|ui(f,selections , contains,&input_state.1.to_owned()))?;
+        should_quit = handle_events(selections, contains,  &mut input_state)?;
         unsafe{
-            if CLEAR{
+            if CLEAR{ // clear before entering sub terminal
                 enable_raw_mode();
                 terminal.clear();
                 CLEAR=false;
@@ -61,54 +65,100 @@ fn main() -> io::Result<()>{
     Ok(())
 }
 
-fn handle_events(selections : &mut (usize , &mut dirs::Directory ,usize ,  Entry), contants  : &mut (Vec<PathBuf>,Vec<String>)) -> io::Result<bool> {
+fn handle_events(selections : &mut (usize , &mut dirs::Directory ,usize ,  Entry), contants  : &mut (Vec<PathBuf>,Vec<String>),input_state: &mut (&mut bool,&mut String , &mut usize)) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') {
-                return Ok(true);
-            }
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down ||key.code == KeyCode::Char('j'){
-                if selections.2 + 1 < selections.1.contains_count{
-                    selections.2 = selections.2 + 1 ;
+            if !*(input_state.0 /* mode of input */ ){ //if the user not trying to input text
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') { //quit 
+                    return Ok(true);
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down ||key.code == KeyCode::Char('j'){
+                    if selections.2 + 1 < selections.1.contains_count{
+                        selections.2 = selections.2 + 1 ;
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up ||key.code == KeyCode::Char('k'){
+                    if selections.2 > 0 {
+                        selections.2 = selections.2 - 1 ;
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Left ||key.code == KeyCode::Char('h'){
+                    let _ = selections.1.up();
+                    selections.2 = selections.0;
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Right ||key.code == KeyCode::Char('l'){
+                    if selections.1. contains_count != 0 {
+                        let _ = selections.1.down(selections.2);
+                        selections.0 = selections.2;
+                        selections.2 = 0;
+                    }
+                    
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter ||key.code == KeyCode::Char('S'){
+                    let _ = selections.1.start_shell_in_dir();
+                    unsafe{
+                        CLEAR = true;
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Delete||key.code == KeyCode::Char('D'){ // removes the Entry
+                    match &selections.3{// checks the type of slection typee
+                        Entry::dir(d)=>{let _ = d.remove();},
+                        Entry::file(f)=>{let _ = f.remove();},
+                        Entry::None=>{},
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('r'){ // removes the Entry
+                    *input_state.0= true; 
+                    *input_state.2= 1; 
                 }
             }
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up ||key.code == KeyCode::Char('k'){
-                if selections.2 > 0 {
-                    selections.2 = selections.2 - 1 ;
+            else{ //if we are in input mode
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter {
                 }
-            }
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Left ||key.code == KeyCode::Char('h'){
-                let _ = selections.1.up();
-                selections.2 = selections.0;
-            }
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Right ||key.code == KeyCode::Char('l'){
-                if selections.1. contains_count != 0 {
-                    let _ = selections.1.down(selections.2);
-                    selections.0 = selections.2;
-                    selections.2 = 0;
+                    match key.code{
+                        KeyCode::Char(c)=>{
+                            input_state.1.push(c);
+
+                        }
+                        KeyCode::Enter=>{
+                            let _ = input_operation_excute(selections,input_state);
+                            *input_state.0= false;
+                            input_state.1.clear() ;
+                            *input_state.2= 0;
+                        },
+                        KeyCode::Backspace =>{
+                            input_state.1.pop();
+                        },
+                        _=>{}
+                    }
+
                 }
-                
-            }
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter ||key.code == KeyCode::Char('S'){
-                let _ = selections.1.start_shell_in_dir();
-                unsafe{
-                    CLEAR = true;
-                }
-            }
-            if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Delete||key.code == KeyCode::Char('D'){ // removes the Entry
-                match &selections.3{// checks the type of slection typee
-                    Entry::dir(d)=>{d.remove();},
-                    Entry::file(f)=>{f.remove();},
-                    Entry::None=>{},
-                }
-            }
         }
         update(selections,contants);
     }
     Ok(false)
 }
+fn input_operation_excute(selections : &mut (usize , &mut dirs::Directory ,usize ,  Entry),input_state: &mut (&mut bool,&mut String , &mut usize)) -> io::Result<()> {
+    match input_state.2 {
 
-fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize ,  Entry) , constants  : &mut (Vec<PathBuf>,Vec<String>)) {
+        1=>{ // the rename operation
+            match &mut selections.3 { // checks the Entry type 
+                    Entry::dir(d)=>{let _ = d.rename(input_state.1);},
+                    Entry::file(f)=>{let _ = f.rename(input_state.1);},
+                    Entry::None=>{},
+                }
+
+        }, 
+        _=>{},
+    }
+    Ok(())
+}
+
+fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize ,  Entry) , constants  : &mut (Vec<PathBuf>,Vec<String>), input_string: &str) {
+    let commands: Vec<String> = vec![
+    "('D' , Delete  : remove)".to_string(),
+    "('r'   :  rename )".to_string(),
+];
  let curr = &selections.1; // the curr dir
  let prev = curr.prev(); // gets the prev dir
  selections.0 = curr.find_index(); // finds the index of curr in prev 
@@ -128,18 +178,16 @@ fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize 
         Block::new().borders(Borders::TOP).title("Fileio by philo"),
         main_layout[0],
     );
-    frame.render_widget(
-        Block::new().borders(Borders::ALL).title("Commands"),
-        main_layout[2],
-    );
 
+
+    // the expplorer layout 
     let inner_layout = Layout::new(
         Direction::Horizontal,
         [Constraint::Percentage(50), Constraint::Percentage(50),Constraint::Percentage(50)],
     )
     .split(main_layout[1]);
     let mut sel = ListState::default(); // selection state of curr dir
-    let mut next_sel = ListState::default();// selection state of next dir just set to nothing 
+    let mut no_sel = ListState::default();// selection state of next dir just set to nothing 
     let mut prev_sel = ListState::default();// selection state of prev dir
     sel.select(Some(selections.2)); // Select the first item initially
     prev_sel.select(Some(selections.0)); // Select the index of curr in prev
@@ -148,13 +196,33 @@ fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize 
         render_list(frame, inner_layout[0],prev_c , &mut prev_sel,"Prev"); // renders it 
     }
     render_list(frame, inner_layout[1],current_contains_strings.to_owned() , &mut sel,format!("Curr").as_str());
-     if  current_contains_pathes.len() != 0 {
-        if current_contains_pathes[selections.2].is_dir(){
-            let next_c = dirs::Directory::new(current_contains_pathes[selections.2].as_path()).unwrap().vec_of_contains().unwrap().1;
-            render_list(frame, inner_layout[2],next_c , &mut next_sel,"next");
 
-        }
-    }
+     if let Entry::dir(d) = &selections.3 { // if the selection is on a dir 
+             let next_c = d.vec_of_contains().unwrap().1;
+             render_list(frame, inner_layout[2],next_c , &mut no_sel,"next");
+
+     }
+
+    // the operations area
+    let down_layout = Layout::new( // the down square
+        Direction::Vertical,
+        [Constraint::Percentage(30), Constraint::Percentage(70)],
+    )
+    .split(main_layout[2]);
+
+    frame.render_widget(// the texxt input box
+        Paragraph::new(input_string)
+            .block(Block::default().title("input").borders(Borders::ALL)),
+        down_layout[0],
+    );
+    // the command area
+    let operation_layout = Layout::new(
+        Direction::Horizontal,
+        [Constraint::Percentage(50), Constraint::Percentage(50)],
+    )
+    .split(down_layout[1]);
+    render_list(frame, operation_layout[0] ,commands , &mut no_sel,"command");
+
 }
 
 fn update (selections : &mut (usize , &mut dirs::Directory ,usize ,Entry) , contains  : &mut (Vec<PathBuf>,Vec<String>)){ // updates the selected entry 
