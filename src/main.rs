@@ -232,6 +232,13 @@ fn ui(frame: &mut Frame, selections : &mut (usize , &mut dirs::Directory ,usize 
     let commands: Vec<String> = vec![
     "('D' , Delete  : remove)".to_string(),
     "('r'   :  rename )".to_string(),
+    "('S'   :  open shell in dir )".to_string(),
+    "('y'   :  copy )".to_string(),
+    "('d'   :  cut )".to_string(),
+    "('p'   :  paste )".to_string(),
+    "('x'   :  remove from buffer )".to_string(),
+    "('w'   :  buffer up )".to_string(),
+    "('s'   :  buffer down )".to_string(),
 ];
  let mut buffer : Vec <String> = Vec::new();
  let curr = &selections.1; // the curr dir
