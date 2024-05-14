@@ -27,11 +27,11 @@ static mut CLEAR: bool = false;
 fn main() -> io::Result<()> {
     let curr_dir: &mut dirs::Directory = &mut dirs::Directory::get_env_dir().unwrap();
     let prev_sel: usize = 0;
-    let sel: usize = 0;
-    let selected: Entry = Entry::None;
+    let sel: usize = 0; // the cursor posison
+    let selected: Entry = Entry::None; // the selected entry that cursor points to
 
     let selections = &mut (prev_sel, curr_dir, sel, selected);
-    let contains = &mut selections.1.vec_of_contains().unwrap();
+    let contains = &mut selections.1.vec_of_contains().unwrap(); // the contains of the opening dir
 
     let mut input_mode: bool = false; //to now if we are inputing
     let mut input_string = &mut String::new(); // the string the user will enter
@@ -227,10 +227,7 @@ fn handle_events(
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('x') {
-                    // delete
-                    // selection
-                    // from
-                    // buffer
+                    // delete selection from buffer
                     if buffer_state.1.len() != 0 && buffer_state.0 < buffer_state.1.len() {
                         buffer_state.1.remove(buffer_state.0);
                     }
@@ -383,7 +380,8 @@ fn ui(
 
     frame.render_widget(
         // the texxt input box
-        Paragraph::new(input_string).block(Block::default().title("input").borders(Borders::ALL)),
+        Paragraph::new(input_string).block(Block::default().title("input").borders(Borders::ALL).style(Style::new().blue().fg(Color::White).bg(Color::Black))),
+            
         down_layout[0],
     );
     // the command area
@@ -399,7 +397,7 @@ fn ui(
         buffer,
         &mut buffer_sel,
         "buffer",
-    ); // hte buffer
+    ); // the buffer
 }
 
 fn update(
@@ -451,7 +449,7 @@ fn render_list(
         List::new(contains)
             .block(Block::default().title(title).borders(Borders::ALL)) // sets the
             // title
-            .style(Style::new().blue())
+            .style(Style::new().blue().fg(Color::White).bg(Color::Black))
             .highlight_style(
                 Style::default()
                     .add_modifier(Modifier::BOLD)
