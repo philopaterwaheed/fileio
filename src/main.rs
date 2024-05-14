@@ -111,10 +111,18 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Right
                     || key.code == KeyCode::Char('l')
                 {
-                    if selections.1.contains_count != 0 {
-                        let _ = selections.1.down(selections.2);
-                        selections.0 = selections.2;
-                        selections.2 = 0;
+                    match &selections.3 {
+                        Entry::dir(d) => {
+                            if d.contains_count != 0 {
+                                let _ = selections.1.down(selections.2);
+                                selections.0 = selections.2;
+                                selections.2 = 0;
+                            }
+                        }
+                        Entry::file(f) => {
+                            todo!() /* open the file with it's defualt app*/
+                        }
+                        Entry::None => {}
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter
@@ -380,8 +388,12 @@ fn ui(
 
     frame.render_widget(
         // the texxt input box
-        Paragraph::new(input_string).block(Block::default().title("input").borders(Borders::ALL).style(Style::new().blue().fg(Color::White).bg(Color::Black))),
-            
+        Paragraph::new(input_string).block(
+            Block::default()
+                .title("input")
+                .borders(Borders::ALL)
+                .style(Style::new().blue().fg(Color::White).bg(Color::Black)),
+        ),
         down_layout[0],
     );
     // the command area
