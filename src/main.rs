@@ -366,8 +366,11 @@ fn ui(
 
     if let Entry::dir(d) = &selections.3 {
         // if the selection is on a dir
-        let next_c = d.vec_of_contains().unwrap().1;
-        render_list(frame, inner_layout[2], next_c, &mut no_sel, "next");
+        if let Ok(contains) = d.vec_of_contains() {
+            let next_c = contains.1; // the paths  if ok
+            render_list(frame, inner_layout[2], next_c, &mut no_sel, "next");
+        } else {
+        }
     }
 
     // the operations area
@@ -404,29 +407,35 @@ fn update(
     contains: &mut (Vec<PathBuf>, Vec<String>),
 ) {
     // updates the selected entry
-    let temp = selections.1.vec_of_contains().unwrap(); // gets what current dir contains
-    contains.0 = temp.0;
-    contains.1 = temp.1;
-    // checks the path of the selected Entry
-    if selections.2 >= contains.0.len() {
-        // if we are now selecting byond the dir size
-        // becuase of delete or something like that
-        selections.2 = std::cmp::max(contains.0.len() as i32 - 1, 0) as usize; // the compare for if the dir empty
-                                                                               // the selection would be -1
-    }
-    if contains.0.len() > 0 {
-        // to avoid 0 indexing if the dir is empty
-        let path = contains.0[selections.2].as_path(); // the path of the entry selected
-        if path.is_dir() {
-            selections.3 = Entry::dir(dirs::Directory::new(path).unwrap()); // setting it to the dir
-                                                                            // variant
-        } else {
-            selections.3 = Entry::file(files::File::new(path).unwrap()); // setting it to the file
-                                                                         // variant
+    if let Ok(temp) = selections.1.vec_of_contains() {
+        contains.0 = temp.0;
+        contains.1 = temp.1;
+        // checks the path of the selected Entry
+        if selections.2 >= contains.0.len() {
+            // if we are now selecting byond the dir size
+            // becuase of delete or something like that
+            selections.2 = std::cmp::max(contains.0.len() as i32 - 1, 0) as usize;
+            // the compare for if the dir empty
+            // the selection would be -1
         }
-    } else {
-        // if the dir is empty set the Entry to None
-        selections.3 = Entry::None;
+        if contains.0.len() > 0 {
+            // to avoid 0 indexing if the dir is empty
+            let path = contains.0[selections.2].as_path(); // the path of the entry selected
+            if path.is_dir() {
+                if let Ok(new) = dirs::Directory::new(path) {
+                    // if its ok to select it
+                    selections.3 = Entry::dir(new); // setting it to the dir
+                } else {
+                    selections.3 = Entry::None; // setting it to a None just as a place holder
+                }
+            } else {
+                selections.3 = Entry::file(files::File::new(path).unwrap()); // setting it to the file
+                                                                             // variant
+            }
+        } else {
+            // if the dir is empty set the Entry to None
+            selections.3 = Entry::None;
+        }
     }
 }
 
