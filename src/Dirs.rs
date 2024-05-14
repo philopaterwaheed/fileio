@@ -71,12 +71,17 @@ pub mod dirs {
             Ok(())
         }
         pub fn down(&mut self, index: usize) -> io::Result<()> {
-            let dir = &self.vec_of_contains().unwrap().0[index];
-            if dir.is_dir() {
-                let temp = Directory::new(dir).unwrap();
-                self.name = temp.name;
-                self.path = temp.path;
-                self.contains_count = temp.contains_count;
+            // takes the indes of a dir inside it's parent and goes to it 
+            if let Ok (curr)  = &self.vec_of_contains(){
+                let dir = curr.0[index].as_path();
+                if dir.is_dir() {
+                    if let Ok (down) = Directory::new(dir){
+                        let temp = down;
+                        self.name = temp.name;
+                        self.path = temp.path;
+                        self.contains_count = temp.contains_count;
+                    }
+                }
             }
             Ok(())
         }
