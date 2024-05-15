@@ -329,14 +329,13 @@ let commands= vec![
     ]),
     Row::new ([
         "('A'   : add dir)",
+        "('p'   :  paste )",
         "('s'   :  buffer down )",
-        "('S'   :  open shell in dir )",
         "('Arrows'   :  movments )",
     ]),
     Row::new ([
         "('r'   :  rename )",
-        "('p'   :  paste )",
-        "('s'   :  buffer down )",
+        "","",
     ]),
     Row::new ([
               ""
