@@ -76,7 +76,7 @@ fn main() -> io::Result<()> {
 
 fn handle_events(
     selections: &mut (usize, &mut dirs::Directory, usize, Entry),
-    contants: &mut (Vec<PathBuf>, Vec<String>),
+    contains: &mut (Vec<PathBuf>, Vec<String>),
     input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
 ) -> io::Result<bool> {
@@ -91,7 +91,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down
                     || key.code == KeyCode::Char('j')
                 {
-                    if selections.2 + 1 < selections.1.contains_count {
+                    if selections.2 + 1 < contains.1.len() {
                         selections.2 = selections.2 + 1;
                     }
                 }
@@ -112,7 +112,8 @@ fn handle_events(
                     || key.code == KeyCode::Char('l')
                 {
                     match &selections.3 {
-                        Entry::dir(_d) => { // if the selected is a dir enter it 
+                        Entry::dir(_d) => {
+                            // if the selected is a dir enter it
                             if selections.1.contains_count != 0 {
                                 let _ = selections.1.down(selections.2);
                                 selections.0 = selections.2;
@@ -150,9 +151,19 @@ fn handle_events(
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('r') {
-                    // removes the Entry
+                    // renames the Entry
                     *input_state.0 = true;
                     *input_state.2 = 1;
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('a') {
+                    // add a file Entry
+                    *input_state.0 = true;
+                    *input_state.2 = 2;
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('A') {
+                    // removes the Entry
+                    *input_state.0 = true;
+                    *input_state.2 = 3;
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('y') {
                     // copy the Entry
@@ -198,7 +209,7 @@ fn handle_events(
                             Entry::dir(d) => {
                                 if *operation {
                                     // if we are cutting a dir
-                                    if let Ok(x) = move_dir(&d, selections.1) {
+                                    if let Ok(_x) = move_dir(&d, selections.1) {
                                         // if we are not moving into self ;
                                     } else {
                                     }
@@ -244,7 +255,6 @@ fn handle_events(
                 }
             } else {
                 //if we are in input mode
-                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter {}
                 match key.code {
                     KeyCode::Char(c) => {
                         input_state.1.push(c);
@@ -262,7 +272,7 @@ fn handle_events(
                 }
             }
         }
-        update(selections, contants);
+        update(selections, contains);
     }
     Ok(false)
 }
@@ -284,6 +294,14 @@ fn input_operation_excute(
                 Entry::None => {}
             }
         }
+        2=>{
+            // adding a file 
+            let _new_file = files::File::new(selections.1.path.join(&input_state.1).as_path());
+        }
+        3=>{
+            // adding a dir 
+            let _new_dir = dirs::Directory::new(selections.1.path.join(&input_state.1).as_path());
+        }
         _ => {}
     }
     Ok(())
@@ -296,17 +314,34 @@ fn ui(
     input_string: &str,
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
 ) {
-    let commands: Vec<String> = vec![
-        "('D' , Delete  : remove)".to_string(),
-        "('r'   :  rename )".to_string(),
-        "('S'   :  open shell in dir )".to_string(),
-        "('y'   :  copy )".to_string(),
-        "('d'   :  cut )".to_string(),
-        "('p'   :  paste )".to_string(),
-        "('x'   :  remove from buffer )".to_string(),
-        "('w'   :  buffer up )".to_string(),
-        "('s'   :  buffer down )".to_string(),
-    ];
+let commands= vec![
+    Row::new ([
+        "('D' , Delete  : remove)",
+        "('y'   :  copy )",
+        "('x'   :  remove from buffer )",
+        "('S'   :  open shell in dir )",
+    ]),
+    Row::new ([
+        "('a'   : add file)",
+        "('d'   :  cut )",
+        "('w'   :  buffer up )",
+        "('q'   :  quit )",
+    ]),
+    Row::new ([
+        "('A'   : add dir)",
+        "('s'   :  buffer down )",
+        "('S'   :  open shell in dir )",
+        "('Arrows'   :  movments )",
+    ]),
+    Row::new ([
+        "('r'   :  rename )",
+        "('p'   :  paste )",
+        "('s'   :  buffer down )",
+    ]),
+    Row::new ([
+              ""
+    ])
+];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
     let prev = curr.prev(); // gets the prev dir
@@ -369,20 +404,21 @@ fn ui(
         &mut sel,
         format!("Curr").as_str(),
     );
-    match &selections.3 {
+        match &selections.3 {
+        // the content of selected
         Entry::file(f) => {
             let mut in_file: Vec<String> = vec![];
-            if let Ok (x) = f.read(){
+            if let Ok(x) = f.read() {
                 in_file.push(x);
                 render_list(frame, inner_layout[2], in_file, &mut no_sel, "file content");
             }
         }
         Entry::dir(d) => {
-        if let Ok(contains) = d.vec_of_contains() {
-            let next_c = contains.1; // the paths  if ok
-            render_list(frame, inner_layout[2], next_c, &mut no_sel, "next");
-        } else {
-        }
+            if let Ok(contains) = d.vec_of_contains() {
+                let next_c = contains.1; // the paths  if ok
+                render_list(frame, inner_layout[2], next_c, &mut no_sel, "next");
+            } else {
+            }
         }
         Entry::None => {}
     }
@@ -411,7 +447,11 @@ fn ui(
         [Constraint::Percentage(50), Constraint::Percentage(50)],
     )
     .split(down_layout[1]);
-    render_list(frame, operation_layout[0], commands, &mut no_sel, "command");
+    render_table(
+        frame,
+        operation_layout[0],
+        &commands,
+    ); // the commands
     render_list(
         frame,
         operation_layout[1],
@@ -427,6 +467,7 @@ fn update(
 ) {
     // updates the selected entry
     if let Ok(temp) = selections.1.vec_of_contains() {
+        // restets the contains 
         contains.0 = temp.0;
         contains.1 = temp.1;
         // checks the path of the selected Entry
@@ -484,6 +525,35 @@ fn render_list(
         state,
     );
 }
+
+fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>)
+{
+    let mut sel = TableState::default(); // selection state of curr dir
+
+    // Define the widths of the columns
+    let widths = &[
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+        Constraint::Percentage(25),
+    ];
+
+    // Render the table with the provided data
+    frame.render_stateful_widget(
+        Table::new(data.to_vec(),widths) // Convert array to Vec
+            .style(Style::new().blue().fg(Color::White).bg(Color::Black))
+            .block(Block::default().title("commands").borders(Borders::ALL))
+            .header(
+                Row::new(vec!["atler", "ccp", "buffer","controls"])
+                    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            )
+            .highlight_style(Style::default().bg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .widths(widths),
+        rect,
+        &mut sel,
+    );
+}
+
 fn copy_file(
     file: &files::File,
     dircetion_dir: &dirs::Directory,
