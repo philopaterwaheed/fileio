@@ -41,3 +41,11 @@ https://github.com/philopaterwaheed/fileio/assets/61416026/c6ef11d2-6742-44ac-b7
 | `A` | Crate a  dir|
 | `r` | Rename|
 | `D` | Delete|
+
+
+## Get started 
+### simple way
+you can simply download the executable from the releases and then move it to /bin or any other folders that are in the path
+```
+sudo mv fileio /bin
+```
