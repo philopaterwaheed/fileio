@@ -119,8 +119,8 @@ fn handle_events(
                                 selections.2 = 0;
                             }
                         }
-                        Entry::file(f) => { // if the selected is a file
-                            /* open the file with it's defualt app*/
+                        Entry::file(f) => {
+                            // todo!() /* open the file with it's defualt app*/
                             let _result = opener::open(f.path.as_path());
                         }
                         Entry::None => {}
@@ -369,14 +369,22 @@ fn ui(
         &mut sel,
         format!("Curr").as_str(),
     );
-
-    if let Entry::dir(d) = &selections.3 {
-        // if the selection is on a dir
+    match &selections.3 {
+        Entry::file(f) => {
+            let mut in_file: Vec<String> = vec![];
+            if let Ok (x) = f.read(){
+                in_file.push(x);
+                render_list(frame, inner_layout[2], in_file, &mut no_sel, "file content");
+            }
+        }
+        Entry::dir(d) => {
         if let Ok(contains) = d.vec_of_contains() {
             let next_c = contains.1; // the paths  if ok
             render_list(frame, inner_layout[2], next_c, &mut no_sel, "next");
         } else {
         }
+        }
+        Entry::None => {}
     }
 
     // the operations area

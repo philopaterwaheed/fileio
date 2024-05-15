@@ -1,6 +1,6 @@
 pub mod files {
     use std::fs;
-    use std::io::{self, Write};
+    use std::io::{self, BufRead};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     #[derive(Debug)]
@@ -41,6 +41,10 @@ pub mod files {
             self.name = str.to_owned();
             self.path = new_path.as_path().to_owned();
             Ok(())
+        }
+        pub fn read(&self) -> io::Result<String> {
+            let contents = fs::read_to_string(&self.path);
+            contents
         }
     }
 }

@@ -108,6 +108,7 @@ name = "fileio"
 version = "0.1.0"
 dependencies = [
  "crossterm",
+ "opener",
  "ratatui",
 ]
 
@@ -196,6 +197,15 @@ name = "once_cell"
 version = "1.19.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fdb12b2476b595f9358c5161aa467c2438859caa136dec86c26fdd2efe17b92"
+
+[[package]]
+name = "opener"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "13117407ca9d0caf3a0e74f97b490a7e64c0ae3aa90a8b7085544d0c37b6f3ae"
+dependencies = [
+ "winapi",
+]
 
 [[package]]
 name = "parking_lot"
