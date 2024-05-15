@@ -112,15 +112,16 @@ fn handle_events(
                     || key.code == KeyCode::Char('l')
                 {
                     match &selections.3 {
-                        Entry::dir(d) => {
-                            if d.contains_count != 0 {
+                        Entry::dir(_d) => { // if the selected is a dir enter it 
+                            if selections.1.contains_count != 0 {
                                 let _ = selections.1.down(selections.2);
                                 selections.0 = selections.2;
                                 selections.2 = 0;
                             }
                         }
-                        Entry::file(f) => {
-                            todo!() /* open the file with it's defualt app*/
+                        Entry::file(f) => { // if the selected is a file
+                            /* open the file with it's defualt app*/
+                            let _result = opener::open(f.path.as_path());
                         }
                         Entry::None => {}
                     }
