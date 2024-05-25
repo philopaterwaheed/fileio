@@ -294,12 +294,12 @@ fn input_operation_excute(
                 Entry::None => {}
             }
         }
-        2=>{
-            // adding a file 
+        2 => {
+            // adding a file
             let _new_file = files::File::new(selections.1.path.join(&input_state.1).as_path());
         }
-        3=>{
-            // adding a dir 
+        3 => {
+            // adding a dir
             let _new_dir = dirs::Directory::new(selections.1.path.join(&input_state.1).as_path());
         }
         _ => {}
@@ -314,33 +314,28 @@ fn ui(
     input_string: &str,
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
 ) {
-let commands= vec![
-    Row::new ([
-        "('D' , Delete  : remove)",
-        "('y'   :  copy )",
-        "('x'   :  remove from buffer )",
-        "('S'   :  open shell in dir )",
-    ]),
-    Row::new ([
-        "('a'   : add file)",
-        "('d'   :  cut )",
-        "('w'   :  buffer up )",
-        "('q'   :  quit )",
-    ]),
-    Row::new ([
-        "('A'   : add dir)",
-        "('p'   :  paste )",
-        "('s'   :  buffer down )",
-        "('Arrows'   :  movments )",
-    ]),
-    Row::new ([
-        "('r'   :  rename )",
-        "","",
-    ]),
-    Row::new ([
-              ""
-    ])
-];
+    let commands = vec![
+        Row::new([
+            "('D' , Delete  : remove)",
+            "('y'   :  copy )",
+            "('x'   :  remove from buffer )",
+            "('S'   :  open shell in dir )",
+        ]),
+        Row::new([
+            "('a'   : add file)",
+            "('d'   :  cut )",
+            "('w'   :  buffer up )",
+            "('q'   :  quit )",
+        ]),
+        Row::new([
+            "('A'   : add dir)",
+            "('p'   :  paste )",
+            "('s'   :  buffer down )",
+            "('Arrows'   :  movments )",
+        ]),
+        Row::new(["('r'   :  rename )", "", ""]),
+        Row::new([""]),
+    ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
     let prev = curr.prev(); // gets the prev dir
@@ -403,13 +398,11 @@ let commands= vec![
         &mut sel,
         format!("Curr").as_str(),
     );
-        match &selections.3 {
+    match &selections.3 {
         // the content of selected
         Entry::file(f) => {
-            let mut in_file: Vec<String> = vec![];
-            if let Ok(x) = f.read() {
-                in_file.push(x);
-                render_list(frame, inner_layout[2], in_file, &mut no_sel, "file content");
+            if let Ok(contents) = f.read() {
+                render_list(frame, inner_layout[2], contents, &mut no_sel, "file content");
             }
         }
         Entry::dir(d) => {
@@ -446,11 +439,7 @@ let commands= vec![
         [Constraint::Percentage(50), Constraint::Percentage(50)],
     )
     .split(down_layout[1]);
-    render_table(
-        frame,
-        operation_layout[0],
-        &commands,
-    ); // the commands
+    render_table(frame, operation_layout[0], &commands); // the commands
     render_list(
         frame,
         operation_layout[1],
@@ -466,7 +455,7 @@ fn update(
 ) {
     // updates the selected entry
     if let Ok(temp) = selections.1.vec_of_contains() {
-        // restets the contains 
+        // restets the contains
         contains.0 = temp.0;
         contains.1 = temp.1;
         // checks the path of the selected Entry
@@ -525,8 +514,7 @@ fn render_list(
     );
 }
 
-fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>)
-{
+fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
     let mut sel = TableState::default(); // selection state of curr dir
 
     // Define the widths of the columns
@@ -539,14 +527,21 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>)
 
     // Render the table with the provided data
     frame.render_stateful_widget(
-        Table::new(data.to_vec(),widths) // Convert array to Vec
+        Table::new(data.to_vec(), widths) // Convert array to Vec
             .style(Style::new().blue().fg(Color::White).bg(Color::Black))
             .block(Block::default().title("commands").borders(Borders::ALL))
             .header(
-                Row::new(vec!["atler", "ccp", "buffer","controls"])
-                    .style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+                Row::new(vec!["atler", "ccp", "buffer", "controls"]).style(
+                    Style::default()
+                        .fg(Color::Yellow)
+                        .add_modifier(Modifier::BOLD),
+                ),
             )
-            .highlight_style(Style::default().bg(Color::Yellow).add_modifier(Modifier::BOLD))
+            .highlight_style(
+                Style::default()
+                    .bg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            )
             .widths(widths),
         rect,
         &mut sel,

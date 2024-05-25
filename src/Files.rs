@@ -1,6 +1,6 @@
 pub mod files {
     use std::fs;
-    use std::io::{self, BufRead};
+    use std::io::{self, BufRead, BufReader};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     #[derive(Debug)]
@@ -42,9 +42,18 @@ pub mod files {
             self.path = new_path.as_path().to_owned();
             Ok(())
         }
-        pub fn read(&self) -> io::Result<String> {
-            let contents = fs::read_to_string(&self.path);
-            contents
+        pub fn read(&self) -> io::Result<Vec<String>> {
+            let mut contents : Vec<String> = vec![];
+            let file = std::fs::File::open(self.path.as_path())?;
+            let reader = BufReader::new(file);
+            for (index, line) in reader.lines().enumerate() {
+                if index >= 100 {
+                    break;
+                }
+                let line = line?;
+                contents.push(line);
+            }
+            Ok(contents)
         }
     }
 }
