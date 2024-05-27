@@ -48,15 +48,7 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains);
     while !should_quit {
-        terminal.draw(|f| {
-            ui(
-                f,
-                selections,
-                contains,
-                &input_state.1.to_owned(),
-                &mut buffer_state,
-            )
-        })?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state))?;
         should_quit = handle_events(selections, contains, &mut input_state, &mut buffer_state)?;
         unsafe {
             if CLEAR {
@@ -240,7 +232,7 @@ fn handle_events(
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('s') {
                     // increese the buffer selection
-                    if buffer_state.0 < buffer_state.1.len() - 1 {
+                    if buffer_state.0 < (buffer_state.1.len() as i8 - 1)as usize {
                         // if we are less than the buffer
                         // size
                         buffer_state.0 = buffer_state.0 + 1;
@@ -268,7 +260,8 @@ fn handle_events(
                     KeyCode::Backspace => {
                         input_state.1.pop();
                     }
-                    KeyCode::Esc=>{ // exiting out of input mode
+                    KeyCode::Esc => {
+                        // exiting out of input mode
                         *input_state.0 = false;
                         input_state.1.clear();
                         *input_state.2 = 0;
@@ -316,7 +309,7 @@ fn ui(
     frame: &mut Frame,
     selections: &mut (usize, &mut dirs::Directory, usize, Entry),
     constants: &mut (Vec<PathBuf>, Vec<String>),
-    input_string: &str,
+    input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
 ) {
     let commands = vec![
@@ -407,7 +400,13 @@ fn ui(
         // the content of selected
         Entry::file(f) => {
             if let Ok(contents) = f.read() {
-                render_list(frame, inner_layout[2], contents, &mut no_sel, "file content");
+                render_list(
+                    frame,
+                    inner_layout[2],
+                    contents,
+                    &mut no_sel,
+                    "file content",
+                );
             }
         }
         Entry::dir(d) => {
@@ -429,12 +428,22 @@ fn ui(
     .split(main_layout[2]);
 
     frame.render_widget(
-        // the texxt input box
-        Paragraph::new(input_string).block(
-            Block::default()
-                .title("input")
-                .borders(Borders::ALL)
-                .style(Style::new().blue().fg(Color::White).bg(Color::Black)),
+        // the text input box
+        Paragraph::new(input_state.1.to_owned()).block(
+            Block::default().title("input").borders(Borders::ALL).style(
+                Style::new()
+                    .blue()
+                    .fg(if !*input_state.0 {
+                        Color::White
+                    } else {
+                        Color::Black
+                    })
+                    .bg(if !*input_state.0 {
+                        Color::Black
+                    } else {
+                        Color::White
+                    }),
+            ),
         ),
         down_layout[0],
     );
