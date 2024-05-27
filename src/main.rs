@@ -268,6 +268,11 @@ fn handle_events(
                     KeyCode::Backspace => {
                         input_state.1.pop();
                     }
+                    KeyCode::Esc=>{ // exiting out of input mode
+                        *input_state.0 = false;
+                        input_state.1.clear();
+                        *input_state.2 = 0;
+                    }
                     _ => {}
                 }
             }
