@@ -490,9 +490,17 @@ fn update(
                 } else {
                     selections.3 = Entry::None; // setting it to a None just as a place holder
                 }
-            } else {
-                selections.3 = Entry::file(files::File::new(path).unwrap()); // setting it to the file
-                                                                             // variant
+            }else if path.is_file(){
+                if let Ok(new) = files::File::new(path) {
+                selections.3 = Entry::file(new); // setting it to the file
+                }
+                else {
+                    selections.3= Entry::None;
+                }
+            }
+             else {
+                // if the dir is empty set the Entry to None
+                selections.3 = Entry::None;
             }
         } else {
             // if the dir is empty set the Entry to None
