@@ -116,11 +116,9 @@ fn handle_events(
                     match &selections.3 {
                         Entry::dir(_d) => {
                             // if the selected is a dir enter it
-                            if selections.1.contains_count != 0 {
                                 let _ = selections.1.down(selections.2);
                                 selections.0 = selections.2;
                                 selections.2 = 0;
-                            }
                         }
                         Entry::file(f) => {
                             // todo!() /* open the file with it's defualt app*/
