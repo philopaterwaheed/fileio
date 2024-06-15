@@ -41,6 +41,9 @@ fn main() -> io::Result<()> {
     let mut buffer_vec: &mut Vec<(Entry, bool)> = &mut Vec::new(); // the copy and paste buffer
     let mut buffer_state = (0 as usize, buffer_vec); // hte buffer vector and its selection
 
+    let mut search: (&mut Vec<usize>, usize, &mut String) =
+        (&mut Vec::new(), 0, &mut String::new()); // the search results indexs and the selected index
+
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -49,7 +52,13 @@ fn main() -> io::Result<()> {
     update(selections, contains);
     while !should_quit {
         terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state))?;
-        should_quit = handle_events(selections, contains, &mut input_state, &mut buffer_state)?;
+        should_quit = handle_events(
+            selections,
+            contains,
+            &mut input_state,
+            &mut buffer_state,
+            &mut search,
+        )?;
         unsafe {
             if CLEAR {
                 // clear before entering sub terminal
@@ -71,6 +80,7 @@ fn handle_events(
     contains: &mut (Vec<PathBuf>, Vec<String>),
     input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
+    search: &mut (&mut Vec<usize>, usize, &mut String),
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
@@ -157,6 +167,57 @@ fn handle_events(
                     *input_state.0 = true;
                     *input_state.2 = 3;
                 }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('/') {
+                    //search current dir
+                    *input_state.0 = true;
+                    *input_state.2 = 4;
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('n') {
+                    //select next search result
+                    if (search.0).len() > 0 && contains.1.len() > 0 {
+                        if (search.1 as i32 + 1) < search.0.len() as i32
+                            && search.0[search.1] < contains.1.len()
+                            && contains.1[search.0[search.1]].contains(search.2.as_str())
+                        {
+                            search.1 = search.1 + 1;
+                            selections.2 = (search.0)[search.1];
+                        } else {
+                            if search.0[search.1] <= contains.1.len() - 1 {
+                                if contains.1[search.0[search.1]].contains(search.2.as_str()) {
+                                    search.1 = 0;
+                                    selections.2 = (search.0)[search.1];
+                                } else {
+                                    search.1 = 0;
+                                    search.0.clear();
+                                    search.2.clear();
+                                }
+                            }
+                        }
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('N') {
+                    //select prev search result
+                    if (search.0).len() > 0 && contains.1.len() > 0 {
+                        if (search.1 as i32 - 1) >= 0
+                            && search.0[search.1] < contains.1.len()
+                            && contains.1[search.0[search.1]].contains(search.2.as_str())
+                        {
+                            search.1 = search.1 - 1;
+                            selections.2 = (search.0)[search.1];
+                        } else {
+                            if search.0[search.1] <= contains.1.len() - 1 {
+                                if contains.1[search.0[search.1]].contains(search.2.as_str()) {
+                                    search.1 = search.0.len() - 1;
+                                    selections.2 = (search.0)[search.1];
+                                } else {
+                                    search.1 = 0;
+                                    search.0.clear();
+                                    search.2.clear();
+                                }
+                            }
+                        }
+                    }
+                }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('y') {
                     // copy the Entry
                     let copy_entry: Entry;
@@ -232,7 +293,7 @@ fn handle_events(
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('s') {
                     // increese the buffer selection
-                    if buffer_state.0 < (buffer_state.1.len() as i8 - 1)as usize {
+                    if buffer_state.0 < (buffer_state.1.len() as i8 - 1) as usize {
                         // if we are less than the buffer
                         // size
                         buffer_state.0 = buffer_state.0 + 1;
@@ -252,7 +313,7 @@ fn handle_events(
                         input_state.1.push(c);
                     }
                     KeyCode::Enter => {
-                        let _ = input_operation_excute(selections, input_state);
+                        let _ = input_operation_excute(selections, input_state, contains, search);
                         *input_state.0 = false;
                         input_state.1.clear();
                         *input_state.2 = 0;
@@ -277,6 +338,8 @@ fn handle_events(
 fn input_operation_excute(
     selections: &mut (usize, &mut dirs::Directory, usize, Entry),
     input_state: &mut (&mut bool, &mut String, &mut usize),
+    contains: &mut (Vec<PathBuf>, Vec<String>),
+    search: &mut (&mut Vec<usize>, usize, &mut String),
 ) -> io::Result<()> {
     match input_state.2 {
         1 => {
@@ -299,6 +362,17 @@ fn input_operation_excute(
         3 => {
             // adding a dir
             let _new_dir = dirs::Directory::new(selections.1.path.join(&input_state.1).as_path());
+        }
+        4 => {
+            // search
+            if let Ok(searched) = search_dir(&input_state.1, contains) {
+                *(search.0) = searched.clone();
+                if searched.len() > 0 {
+                    selections.2 = searched[0];
+                    *search.2 = input_state.1.clone();
+                    search.1 = 0;
+                }
+            }
         }
         _ => {}
     }
@@ -351,8 +425,8 @@ fn ui(
             Entry::None => {}
         }
     }
-    let (current_contains_pathes, current_contains_strings) = constants; // the contains of curr as vec
-                                                                         // of string and PathBuf
+    let (_current_contains_pathes, current_contains_strings) = constants; // the contains of curr as vec
+                                                                          // of string and PathBuf
     let main_layout = Layout::new(
         Direction::Vertical,
         [
@@ -490,15 +564,13 @@ fn update(
                 } else {
                     selections.3 = Entry::None; // setting it to a None just as a place holder
                 }
-            }else if path.is_file(){
+            } else if path.is_file() {
                 if let Ok(new) = files::File::new(path) {
-                selections.3 = Entry::file(new); // setting it to the file
+                    selections.3 = Entry::file(new); // setting it to the file
+                } else {
+                    selections.3 = Entry::None;
                 }
-                else {
-                    selections.3= Entry::None;
-                }
-            }
-             else {
+            } else {
                 // if the dir is empty set the Entry to None
                 selections.3 = Entry::None;
             }
@@ -646,4 +718,19 @@ fn move_dir(
         let error_message = format!("move into self");
         Err(io::Error::new(io::ErrorKind::NotFound, error_message))
     }
+}
+fn search_dir(
+    query: &str,
+    contains: &mut (Vec<PathBuf>, Vec<String>),
+) -> Result<Vec<usize>, io::Error> {
+    let contains = contains.1.to_owned();
+    // Find the indices of strings that contain the substring
+    let indices: Vec<usize> = contains
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| s.contains(query))
+        .map(|(i, _)| i)
+        .collect();
+
+    Ok(indices)
 }
