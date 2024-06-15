@@ -62,8 +62,8 @@ fn main() -> io::Result<()> {
         unsafe {
             if CLEAR {
                 // clear before entering sub terminal
-                enable_raw_mode();
-                terminal.clear();
+                let _ = enable_raw_mode();
+                let _ = terminal.clear();
                 CLEAR = false;
             }
         }
@@ -405,8 +405,9 @@ fn ui(
             "('s'   :  buffer down )",
             "('Arrows'   :  movments )",
         ]),
-        Row::new(["('r'   :  rename )", "", ""]),
-        Row::new([""]),
+        Row::new(["('r'   :  rename )", "", "", "('/'  :  search )"]),
+        Row::new(["" , "", "","('N'   :  prev search result )", ""]),
+        Row::new(["" , "", "","('n'   :  next search result )", ""]),
     ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
