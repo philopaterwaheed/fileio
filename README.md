@@ -34,16 +34,22 @@ https://github.com/philopaterwaheed/fileio/assets/61416026/c6ef11d2-6742-44ac-b7
 | `x` | Delete from buffer|
 |  `→` | enter if dir open in defulat app if file|
 | `←` | up in dirs tree|
-| `↑` | Selection Up                    |
+| `↑` | Selection Up|
 | `↓` | Selection down|
 | `S` | Open dir in shell|
 | `a` | Touch a file|
 | `A` | Crate a  dir|
 | `r` | Rename|
 | `D` | Delete|
+| `/` | Search|
+| `n` | next search|
+| `N` | prev search|
 
 
 ## Get started 
+### dependencies
+make sure that you have 
+`xdp-open` to open files in their defulat app
 ### simple way
 you can simply download the executable from the releases and then move it to /bin or any other folders that are in the path
 ```

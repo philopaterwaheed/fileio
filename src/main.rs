@@ -13,6 +13,7 @@ use std::io::{self};
 use std::path::{Path, PathBuf};
 use Dirs::dirs;
 use Files::files;
+use std::process::{Stdio,Command};
 
 #[derive(Debug)]
 enum Entry {
@@ -23,7 +24,6 @@ enum Entry {
 }
 
 static mut CLEAR: bool = false;
-
 fn main() -> io::Result<()> {
     let curr_dir: &mut dirs::Directory = &mut dirs::Directory::get_env_dir().unwrap();
     let prev_sel: usize = 0;
@@ -122,7 +122,7 @@ fn handle_events(
                         }
                         Entry::file(f) => {
                             // todo!() /* open the file with it's defualt app*/
-                            let _result = opener::open(f.path.as_path());
+                           let _ =  open_in_default(f.path.as_path());
                         }
                         Entry::None => {}
                     }
@@ -404,8 +404,8 @@ fn ui(
             "('Arrows'   :  movments )",
         ]),
         Row::new(["('r'   :  rename )", "", "", "('/'  :  search )"]),
-        Row::new(["" , "", "","('N'   :  prev search result )", ""]),
-        Row::new(["" , "", "","('n'   :  next search result )", ""]),
+        Row::new(["" , "", "","('N'   :  prev search)", ""]),
+        Row::new(["" , "", "","('n'   :  next search)", ""]),
     ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
@@ -732,4 +732,12 @@ fn search_dir(
         .collect();
 
     Ok(indices)
+}
+fn open_in_default(path : &Path) -> Result<(), Box<dyn std::error::Error>>{
+    Command::new("xdg-open".to_string()   )
+        .arg(path.to_str().unwrap())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()?;
+    Ok(())
 }
