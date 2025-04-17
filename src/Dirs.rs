@@ -71,11 +71,11 @@ pub mod dirs {
             Ok(())
         }
         pub fn down(&mut self, index: usize) -> io::Result<()> {
-            // takes the indes of a dir inside it's parent and goes to it 
-            if let Ok (curr)  = &self.vec_of_contains(){
+            // takes the indes of a dir inside it's parent and goes to it
+            if let Ok(curr) = &self.vec_of_contains() {
                 let dir = curr.0[index].as_path();
                 if dir.is_dir() {
-                    if let Ok (down) = Directory::new(dir){
+                    if let Ok(down) = Directory::new(dir) {
                         let temp = down;
                         self.name = temp.name;
                         self.path = temp.path;
@@ -136,7 +136,7 @@ pub mod dirs {
             disable_raw_mode()?;
             // Set the working directory to the specified directory
             cmd.arg("-c").arg(format!(
-                "clear;cd \"{}\" && exec $SHELL",
+                "reset;clear;cd \"{}\" && exec $SHELL",
                 self.path.to_owned().into_os_string().to_str().unwrap()
             )); // Use "/D" for Windows
                 // Execute the command
