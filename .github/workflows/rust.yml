@@ -1,22 +1,37 @@
-name: Rust
+name: Build and Release (Rust)
 
 on:
   push:
-    branches: [ "main" ]
-  pull_request:
-    branches: [ "main" ]
-
-env:
-  CARGO_TERM_COLOR: always
+    tags:
+      - 'v*'  # Triggers on version tags like v1.0.0
 
 jobs:
   build:
-
+    name: Build and Release Binary
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --verbose
-    - name: Run tests
-      run: cargo test --verbose
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: actions/setup-rust@v1
+        with:
+          rust-version: stable
+
+      - name: Build project
+        run: cargo build --release
+
+      - name: Package binary
+        run: |
+          mkdir -p dist
+          cp target/release/fileio dist/
+          cd dist
+          tar -czvf ${GITHUB_REF##*/}-linux-x86_64.tar.gz fileio
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: dist/*.tar.gz
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
