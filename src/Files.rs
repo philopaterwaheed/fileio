@@ -3,7 +3,7 @@ pub mod files {
     use std::io::{self, BufRead, BufReader};
     use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct File {
         pub path: PathBuf,
         pub name: String,

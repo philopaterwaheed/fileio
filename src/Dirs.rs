@@ -6,7 +6,7 @@ pub mod dirs {
     use std::{env, process::Command};
 
     use crossterm::terminal::disable_raw_mode;
-    #[derive(Debug)]
+    #[derive(Debug, Clone)]
     pub struct Directory {
         pub path: PathBuf,
         pub name: String,

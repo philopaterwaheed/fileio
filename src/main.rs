@@ -9,13 +9,13 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 use std::fs;
-use std::io::{self};
+use std::io::{self, Write, BufReader, BufRead};
 use std::path::{Path, PathBuf};
 use Dirs::dirs;
 use Files::files;
 use std::process::{Stdio,Command};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum Entry {
     // all the operations will be on Entry to detrmine which funtions to use
     file(files::File),
@@ -24,6 +24,75 @@ enum Entry {
 }
 
 static mut CLEAR: bool = false;
+
+// Function to get the pins file path
+fn get_pins_file_path() -> PathBuf {
+    if let Some(home_dir) = std::env::var_os("HOME") {
+        PathBuf::from(home_dir).join(".fileio_pins")
+    } else {
+        PathBuf::from(".fileio_pins")
+    }
+}
+
+// Function to save pins to file
+fn save_pins(pins: &Vec<Entry>) -> io::Result<()> {
+    let pins_file = get_pins_file_path();
+    // clears if it exists
+    let mut file = fs::File::create(&pins_file)?;
+    
+    for pin in pins {
+        match pin {
+            Entry::dir(d) => {
+                writeln!(file, "dir:{}", d.path.to_string_lossy())?;
+            }
+            Entry::file(f) => {
+                writeln!(file, "file:{}", f.path.to_string_lossy())?;
+            }
+            Entry::None => {}
+        }
+    }
+    Ok(())
+}
+
+// Function to load pins from file
+fn load_pins() -> io::Result<Vec<Entry>> {
+    let pins_file = get_pins_file_path();
+    let mut pins = Vec::new();
+    
+    if !pins_file.exists() {
+        return Ok(pins);
+    }
+    
+    let file = fs::File::open(&pins_file)?;
+    let reader = BufReader::new(file);
+    
+    for line in reader.lines() {
+        let line = line?;
+        if let Some((entry_type, path_str)) = line.split_once(':') {
+            let path = PathBuf::from(path_str);
+            
+            // Only add pins that still exist
+            if path.exists() {
+                match entry_type {
+                    "dir" => {
+                        if let Ok(dir) = dirs::Directory::new(&path) {
+                            pins.push(Entry::dir(dir));
+                        }
+                    }
+                    "file" => {
+                        if let Ok(file) = files::File::new(&path) {
+                            pins.push(Entry::file(file));
+                        }
+                    }
+                    _ => {} // Ignore invalid entries
+                }
+            }
+        }
+    }
+    
+    Ok(pins)
+}
+
 fn main() -> io::Result<()> {
     let curr_dir: &mut dirs::Directory = &mut dirs::Directory::get_env_dir().unwrap();
     let prev_sel: usize = 0;
@@ -39,10 +108,15 @@ fn main() -> io::Result<()> {
     let mut input_state = (&mut input_mode, input_string, &mut opera_code);
 
     let mut buffer_vec: &mut Vec<(Entry, bool)> = &mut Vec::new(); // the copy and paste buffer
-    let mut buffer_state = (0 as usize, buffer_vec); // hte buffer vector and its selection
+    let mut buffer_state = (0 as usize, buffer_vec); // the buffer vector and its selection
 
     let mut search: (&mut Vec<usize>, usize, &mut String) =
         (&mut Vec::new(), 0, &mut String::new()); // the search results indexs and the selected index
+
+    let mut pins_vec = load_pins().unwrap_or_else(|_| Vec::new()); // load pins or create empty vec
+    let mut pins: &mut Vec<Entry> = &mut pins_vec; // pinned entries
+    let mut pin_selection: usize = 0; // current selection in pins
+    let mut show_pins_popup: bool = false; // flag to show pins popup
 
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
@@ -51,13 +125,16 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup))?;
         should_quit = handle_events(
             selections,
             contains,
             &mut input_state,
             &mut buffer_state,
             &mut search,
+            pins,
+            &mut pin_selection,
+            &mut show_pins_popup,
         )?;
         unsafe {
             if CLEAR {
@@ -68,6 +145,9 @@ fn main() -> io::Result<()> {
             }
         }
     }
+
+    // eartave pins before exiting
+    let _ = save_pins(pins);
 
     disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
@@ -81,6 +161,9 @@ fn handle_events(
     input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
     search: &mut (&mut Vec<usize>, usize, &mut String),
+    pins: &mut Vec<Entry>,
+    pin_selection: &mut usize,
+    show_pins_popup: &mut bool,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
@@ -93,15 +176,31 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down
                     || key.code == KeyCode::Char('j')
                 {
-                    if selections.2 + 1 < contains.1.len() {
-                        selections.2 = selections.2 + 1;
+                    if *show_pins_popup {
+                        // navigate in pins popup
+                        if !pins.is_empty() && *pin_selection + 1 < pins.len() {
+                            *pin_selection += 1;
+                        }
+                    } else {
+                        // normal file navigation
+                        if selections.2 + 1 < contains.1.len() {
+                            selections.2 = selections.2 + 1;
+                        }
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up
                     || key.code == KeyCode::Char('k')
                 {
-                    if selections.2 > 0 {
-                        selections.2 = selections.2 - 1;
+                    if *show_pins_popup {
+                        // navigate in pins popup
+                        if !pins.is_empty() && *pin_selection > 0 {
+                            *pin_selection -= 1;
+                        }
+                    } else {
+                        // normal file navigation
+                        if selections.2 > 0 {
+                            selections.2 = selections.2 - 1;
+                        }
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Left
@@ -130,9 +229,39 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter
                     || key.code == KeyCode::Char('S')
                 {
-                    let _ = selections.1.start_shell_in_dir();
-                    unsafe {
-                        CLEAR = true;
+                    if *show_pins_popup {
+                        // navigate to selected pin and close popup
+                        if !pins.is_empty() && *pin_selection < pins.len() {
+                            match &pins[*pin_selection] {
+                                Entry::dir(d) => {
+                                    if let Ok(new_dir) = dirs::Directory::new(&d.path) {
+                                        *selections.1 = new_dir;
+                                        selections.2 = 0;
+                                    }
+                                }
+                                Entry::file(f) => {
+                                    if let Some(parent) = f.path.parent() {
+                                        if let Ok(new_dir) = dirs::Directory::new(parent) {
+                                            *selections.1 = new_dir;
+                                            // Find the file in the directory and select it
+                                            if let Ok(contains_result) = selections.1.vec_of_contains() {
+                                                if let Some(pos) = contains_result.0.iter().position(|p| p == &f.path) {
+                                                    selections.2 = pos;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                Entry::None => {}
+                            }
+                        }
+                        *show_pins_popup = false;
+                    } else {
+                        // normal shell opening
+                        let _ = selections.1.start_shell_in_dir();
+                        unsafe {
+                            CLEAR = true;
+                        }
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Delete
@@ -304,6 +433,62 @@ fn handle_events(
                     }
                     buffer_state.0 = 0;
                 }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('P') {
+                    // pin current selection
+                    if !matches!(selections.3, Entry::None) {
+                        let pin_entry = selections.3.clone();
+                        if !pins.iter().any(|p| match (p, &pin_entry) {
+                            (Entry::dir(d1), Entry::dir(d2)) => d1.path == d2.path,
+                            (Entry::file(f1), Entry::file(f2)) => f1.path == f2.path,
+                            _ => false,
+                        }) {
+                            pins.push(pin_entry);
+                            let _ = save_pins(pins); // Save pins after adding
+                        }
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('u') {
+                    // unpin current selection
+                    if !matches!(selections.3, Entry::None) {
+                        let original_len = pins.len();
+                        pins.retain(|p| match (p, &selections.3) {
+                            (Entry::dir(d1), Entry::dir(d2)) => d1.path != d2.path,
+                            (Entry::file(f1), Entry::file(f2)) => f1.path != f2.path,
+                            _ => true,
+                        });
+                        // Save pins if any were removed
+                        if pins.len() != original_len {
+                            let _ = save_pins(pins);
+                        }
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('o') {
+                    // toggle pins popup
+                    *show_pins_popup = !*show_pins_popup;
+                    if *show_pins_popup && !pins.is_empty() {
+                        *pin_selection = 0; // reset selection when opening popup
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Esc {
+                    // close pins popup
+                    if *show_pins_popup {
+                        *show_pins_popup = false;
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('U') {
+                    // remove selected pin from pins list (when in popup)
+                    if *show_pins_popup && !pins.is_empty() && *pin_selection < pins.len() {
+                        pins.remove(*pin_selection);
+                        let _ = save_pins(pins); // Save pins after removing
+                        
+                        // Adjust pin selection if needed
+                        if *pin_selection >= pins.len() && pins.len() > 0 {
+                            *pin_selection = pins.len() - 1;
+                        } else if pins.is_empty() {
+                            *pin_selection = 0;
+                        }
+                    }
+                }
             } else {
                 //if we are in input mode
                 match key.code {
@@ -383,6 +568,9 @@ fn ui(
     constants: &mut (Vec<PathBuf>, Vec<String>),
     input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
+    pins: &mut Vec<Entry>,
+    pin_selection: &mut usize,
+    show_pins_popup: &mut bool,
 ) {
     let commands = vec![
         Row::new([
@@ -390,22 +578,25 @@ fn ui(
             "('y'   :  copy )",
             "('x'   :  remove from buffer )",
             "('S'   :  open shell in dir )",
+            "('P'   :  pin )"
         ]),
         Row::new([
             "('a'   : add file)",
             "('d'   :  cut )",
             "('w'   :  buffer up )",
             "('q'   :  quit )",
+            "('u'   :  unpin )",
         ]),
         Row::new([
             "('A'   : add dir)",
             "('p'   :  paste )",
             "('s'   :  buffer down )",
             "('Arrows'   :  movments )",
+            "('o'   :  pins popup )",
         ]),
-        Row::new(["('r'   :  rename )", "", "", "('/'  :  search )"]),
-        Row::new(["" , "", "","('N'   :  prev search)", ""]),
-        Row::new(["" , "", "","('n'   :  next search)", ""]),
+        Row::new(["('r'   :  rename )", "", "", "('/'  :  search )" , "('U'   :  remove pin )"]),
+        Row::new(["" , "" , "" ,  "('N'   :  prev search)"  ]),
+        Row::new(["" , "" , "", "('n'   :  next search)",  ]),
     ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
@@ -444,9 +635,9 @@ fn ui(
     let inner_layout = Layout::new(
         Direction::Horizontal,
         [
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
-            Constraint::Percentage(50),
+            Constraint::Percentage(33),
+            Constraint::Percentage(34),
+            Constraint::Percentage(33),
         ],
     )
     .split(main_layout[1]);
@@ -454,9 +645,11 @@ fn ui(
     let mut no_sel = ListState::default(); // selection state of next dir just set to nothing
     let mut prev_sel = ListState::default(); // selection state of prev dir
     let mut buffer_sel = ListState::default(); // selection state of buffer
+    let mut pins_sel = ListState::default(); // selection state of pins
     sel.select(Some(selections.2)); // Select the first item initially
     prev_sel.select(Some(selections.0)); // Select the index of curr in prev
     buffer_sel.select(Some(buffer_state.0)); // Selection of buffer
+    pins_sel.select(Some(*pin_selection)); // Selection of pins
     if let Ok(d) = prev {
         // checks if the prev dir exists in case we are in /
         let prev_c = d.vec_of_contains().unwrap().1;
@@ -523,7 +716,7 @@ fn ui(
     // the command area
     let operation_layout = Layout::new(
         Direction::Horizontal,
-        [Constraint::Percentage(50), Constraint::Percentage(50)],
+        [Constraint::Percentage(70), Constraint::Percentage(30)],
     )
     .split(down_layout[1]);
     render_table(frame, operation_layout[0], &commands); // the commands
@@ -534,6 +727,11 @@ fn ui(
         &mut buffer_sel,
         "buffer",
     ); // the buffer
+
+    // Render pins popup if enabled
+    if *show_pins_popup {
+        render_pins_popup(frame, pins, pin_selection);
+    }
 }
 
 fn update(
@@ -611,11 +809,12 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
     let mut sel = TableState::default(); // selection state of curr dir
 
     // Define the widths of the columns
-    let widths = &[
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
-        Constraint::Percentage(25),
+    let widths: &[Constraint; 5] = &[
+        Constraint::Percentage(20),
+        Constraint::Percentage(20),
+        Constraint::Percentage(20),
+        Constraint::Percentage(20),
+        Constraint::Percentage(20),
     ];
 
     // Render the table with the provided data
@@ -624,13 +823,13 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
             .style(Style::new().blue().fg(Color::White).bg(Color::Black))
             .block(Block::default().title("commands").borders(Borders::ALL))
             .header(
-                Row::new(vec!["atler", "ccp", "buffer", "controls"]).style(
+                Row::new(vec!["atler", "ccp", "buffer", "controls" , "pin"]).style(
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
                 ),
             )
-            .highlight_style(
+            .row_highlight_style(
                 Style::default()
                     .bg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
@@ -639,6 +838,80 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
         rect,
         &mut sel,
     );
+}
+
+fn render_pins_popup(frame: &mut Frame, pins: &mut Vec<Entry>, pin_selection: &mut usize) {
+    // Create a centered popup area
+    let popup_area = centered_rect(60, 40, frame.size());
+    
+    // Clear the area first
+    frame.render_widget(Clear, popup_area);
+    
+    // Create pins display
+    let mut pins_display: Vec<String> = Vec::new();
+    if pins.is_empty() {
+        pins_display.push("No pins available".to_string());
+        pins_display.push("Press 'P' to pin files/folders".to_string());
+    } else {
+        for (_i, pin) in pins.iter().enumerate() {
+            let pin_name = match pin {
+                Entry::dir(d) => format!("📁 {}", d.name),
+                Entry::file(f) => format!("📄 {}", f.name),
+                Entry::None => "".to_string(),
+            };
+            pins_display.push(pin_name);
+        }
+    }
+
+    // Create list state and select current pin
+    let mut list_state = ListState::default();
+    if !pins.is_empty() && *pin_selection < pins.len() {
+        list_state.select(Some(*pin_selection));
+    }
+
+    // Render the popup
+    frame.render_stateful_widget(
+        List::new(pins_display)
+            .block(
+                Block::default()
+                    .title("Pins (Enter: Go to, Esc: Close, U: Remove)")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Cyan))
+            )
+            .style(Style::default().fg(Color::White).bg(Color::Black))
+            .highlight_style(
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED)
+                    .fg(Color::Black)
+                    .bg(Color::Cyan)
+            )
+            .highlight_symbol("→ ")
+            .repeat_highlight_symbol(true),
+        popup_area,
+        &mut list_state,
+    );
+}
+
+/// helper function to create a centered rect using up certain percentage of the available rect `r`
+fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
 }
 
 fn copy_file(
