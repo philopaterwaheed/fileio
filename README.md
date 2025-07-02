@@ -75,3 +75,12 @@ you can simply download the executable from the releases and then move it to /bi
 ```
 sudo mv fileio /bin
 ```
+
+- ### Background paste operations with progress tracking
+    Large file and directory operations now run in the background without blocking the UI. A progress bar shows the current operation status, including:
+    - Current file being processed
+    - Number of files completed vs total files
+    - Data transferred with size formatting (B, KB, MB, GB, TB)
+    - Overall progress percentage
+    
+    This ensures smooth navigation while large copy/move operations are running in the background.

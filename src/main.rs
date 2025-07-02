@@ -9,11 +9,13 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 use std::fs;
-use std::io::{self, Write, BufReader, BufRead};
+use std::io::{self, Write, BufReader, BufRead, Read};
 use std::path::{Path, PathBuf};
 use Dirs::dirs;
 use Files::files;
 use std::process::{Stdio,Command};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 #[derive(Debug, Clone)]
 enum Entry {
@@ -21,6 +23,29 @@ enum Entry {
     file(files::File),
     dir(dirs::Directory),
     None, // for empty dirs they don't have Entries in them
+}
+
+#[derive(Debug, Clone)]
+struct PasteProgress {
+    current_file: String,
+    files_done: usize,
+    total_files: usize,
+    bytes_done: u64,
+    total_bytes: u64,
+    is_active: bool,
+}
+
+impl Default for PasteProgress {
+    fn default() -> Self {
+        Self {
+            current_file: String::new(),
+            files_done: 0,
+            total_files: 0,
+            bytes_done: 0,
+            total_bytes: 0,
+            is_active: false,
+        }
+    }
 }
 
 static mut CLEAR: bool = false;
@@ -118,6 +143,8 @@ fn main() -> io::Result<()> {
     let mut pin_selection: usize = 0; // current selection in pins
     let mut show_pins_popup: bool = false; // flag to show pins popup
 
+    let paste_progress = Arc::new(Mutex::new(PasteProgress::default()));
+
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
@@ -125,7 +152,7 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup, &paste_progress))?;
         should_quit = handle_events(
             selections,
             contains,
@@ -135,6 +162,7 @@ fn main() -> io::Result<()> {
             pins,
             &mut pin_selection,
             &mut show_pins_popup,
+            &paste_progress,
         )?;
         unsafe {
             if CLEAR {
@@ -164,6 +192,7 @@ fn handle_events(
     pins: &mut Vec<Entry>,
     pin_selection: &mut usize,
     show_pins_popup: &mut bool,
+    paste_progress: &Arc<Mutex<PasteProgress>>,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
@@ -383,34 +412,10 @@ fn handle_events(
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('p') {
                     // pastes buffer the Entry
-                    for (entry, operation) in buffer_state.1.iter_mut() {
-                        match &entry {
-                            // chciking the type of element
-                            Entry::dir(d) => {
-                                if *operation {
-                                    // if we are cutting a dir
-                                    if let Ok(_x) = move_dir(&d, selections.1) {
-                                        // if we are not moving into self ;
-                                    } else {
-                                    }
-                                } else {
-                                    // if we are copying
-                                    let _ = copy_dir(&d, selections.1);
-                                }
-                            }
-                            Entry::file(f) => {
-                                if *operation {
-                                    // if we are cutting a dir
-                                    let _ = move_file(&f, selections.1);
-                                } else {
-                                    // if we are copying
-                                    let _ = copy_file(&f, selections.1);
-                                }
-                            }
-                            Entry::None => {}
-                        }
+                    if !buffer_state.1.is_empty() {
+                        start_background_paste(buffer_state.1.clone(), selections.1.path.clone(), paste_progress.clone());
+                        buffer_state.1.clear(); //clear the buffer
                     }
-                    buffer_state.1.clear(); //clear the buffer
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('w') {
                     // decreese the buffer selection
@@ -571,6 +576,7 @@ fn ui(
     pins: &mut Vec<Entry>,
     pin_selection: &mut usize,
     show_pins_popup: &mut bool,
+    paste_progress: &Arc<Mutex<PasteProgress>>,
 ) {
     let commands = vec![
         Row::new([
@@ -625,7 +631,7 @@ fn ui(
             Constraint::Ratio(30, 100),
         ],
     )
-    .split(frame.size());
+    .split(frame.area());
     frame.render_widget(
         Block::new().borders(Borders::TOP).title("Fileio by philo"),
         main_layout[0],
@@ -731,6 +737,13 @@ fn ui(
     // Render pins popup if enabled
     if *show_pins_popup {
         render_pins_popup(frame, pins, pin_selection);
+    }
+
+    // Render paste progress if active
+    if let Ok(progress) = paste_progress.lock() {
+        if progress.is_active {
+            render_paste_progress(frame, &progress);
+        }
     }
 }
 
@@ -842,7 +855,7 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
 
 fn render_pins_popup(frame: &mut Frame, pins: &mut Vec<Entry>, pin_selection: &mut usize) {
     // Create a centered popup area
-    let popup_area = centered_rect(60, 40, frame.size());
+    let popup_area = centered_rect(60, 40, frame.area());
     
     // Clear the area first
     frame.render_widget(Clear, popup_area);
@@ -914,83 +927,6 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         .split(popup_layout[1])[1]
 }
 
-fn copy_file(
-    file: &files::File,
-    dircetion_dir: &dirs::Directory,
-) -> Result<files::File, io::Error> {
-    let new_name = file.name.clone();
-    fs::copy(
-        file.path.as_path(),
-        dircetion_dir.path.join(new_name.as_str()).as_path(),
-    )?;
-    let out_file = files::File::new(dircetion_dir.path.join(new_name.as_str()).as_path());
-    out_file
-}
-fn move_file(
-    file: &files::File,
-    dircetion_dir: &dirs::Directory,
-) -> Result<files::File, io::Error> {
-    let new_name = file.name.clone();
-    fs::rename(
-        file.path.as_path(),
-        dircetion_dir.path.join(new_name.as_str()).as_path(),
-    )?;
-    let out_file = files::File::new(dircetion_dir.path.join(new_name.as_str()).as_path());
-    out_file
-}
-
-fn copy_dir(
-    source_dir: &dirs::Directory,
-    dircetion_dir: &dirs::Directory,
-) -> Result<dirs::Directory, io::Error> {
-    let new_name = source_dir.name.clone();
-    let new_path = &dircetion_dir.path.join(&new_name);
-    let dir = dirs::Directory::new(new_path);
-
-    for entry in fs::read_dir(source_dir.path.to_owned())? {
-        let entry = entry?;
-        let ty = entry.file_type()?;
-        if ty.is_dir() {
-            let entry_name = entry.file_name().into_string().ok().unwrap();
-            copy_dir(
-                &dirs::Directory::new(entry.path().as_path()).unwrap(),
-                &dirs::Directory::new(new_path.as_path()).unwrap(),
-            )?;
-        } else {
-            fs::copy(entry.path(), new_path.join(entry.file_name()))?;
-        }
-    }
-    dir
-}
-
-fn move_dir(
-    source_dir: &dirs::Directory,
-    dircetion_dir: &dirs::Directory,
-) -> Result<dirs::Directory, io::Error> {
-    let new_name = source_dir.name.clone();
-    let new_path = &dircetion_dir.path.join(&new_name);
-    if dircetion_dir.path.as_path() != source_dir.path.as_path() {
-        let dir = dirs::Directory::new(new_path);
-
-        for entry in fs::read_dir(source_dir.path.to_owned())? {
-            let entry = entry?;
-            let ty = entry.file_type()?;
-            if ty.is_dir() {
-                move_dir(
-                    &dirs::Directory::new(entry.path().as_path()).unwrap(),
-                    &dirs::Directory::new(new_path.as_path()).unwrap(),
-                )?;
-            } else {
-                fs::rename(entry.path(), new_path.join(entry.file_name()))?;
-            }
-        }
-        let _remove_pross = source_dir.remove();
-        dir
-    } else {
-        let error_message = format!("move into self");
-        Err(io::Error::new(io::ErrorKind::NotFound, error_message))
-    }
-}
 fn search_dir(
     query: &str,
     contains: &mut (Vec<PathBuf>, Vec<String>),
@@ -1013,4 +949,342 @@ fn open_in_default(path : &Path) -> Result<(), Box<dyn std::error::Error>>{
         .stderr(Stdio::null())
         .spawn()?;
     Ok(())
+}
+
+fn start_background_paste(
+    buffer: Vec<(Entry, bool)>,
+    dest_dir: PathBuf,
+    progress: Arc<Mutex<PasteProgress>>,
+) {
+    thread::spawn(move || {
+        // Calculate total work
+        let mut total_files = 0;
+        let mut total_bytes = 0;
+        
+        for (entry, _) in &buffer {
+            match entry {
+                Entry::file(f) => {
+                    total_files += 1;
+                    if let Ok(metadata) = f.path.metadata() {
+                        total_bytes += metadata.len();
+                    }
+                }
+                Entry::dir(d) => {
+                    if let Ok((files, bytes)) = count_dir_contents(&d.path) {
+                        total_files += files;
+                        total_bytes += bytes;
+                    }
+                }
+                Entry::None => {}
+            }
+        }
+
+        // Initialize progress
+        {
+            let mut prog = progress.lock().unwrap();
+            prog.total_files = total_files;
+            prog.total_bytes = total_bytes;
+            prog.files_done = 0;
+            prog.bytes_done = 0;
+            prog.is_active = true;
+        }
+
+        // Process each entry
+        for (entry, operation) in buffer {
+            match entry {
+                Entry::dir(d) => {
+                    if operation {
+                        // Move directory
+                        let _ = background_move_dir(&d, &dest_dir, &progress);
+                    } else {
+                        // Copy directory
+                        let _ = background_copy_dir(&d, &dest_dir, &progress);
+                    }
+                }
+                Entry::file(f) => {
+                    if operation {
+                        // Move file
+                        let _ = background_move_file(&f, &dest_dir, &progress);
+                    } else {
+                        // Copy file
+                        let _ = background_copy_file(&f, &dest_dir, &progress);
+                    }
+                }
+                Entry::None => {}
+            }
+        }
+
+        // Mark as complete
+        {
+            let mut prog = progress.lock().unwrap();
+            prog.is_active = false;
+            prog.current_file.clear();
+        }
+    });
+}
+
+fn count_dir_contents(path: &Path) -> io::Result<(usize, u64)> {
+    let mut file_count = 0;
+    let mut total_bytes = 0;
+
+    for entry in fs::read_dir(path)? {
+        let entry = entry?;
+        let path = entry.path();
+        
+        if path.is_file() {
+            file_count += 1;
+            if let Ok(metadata) = path.metadata() {
+                total_bytes += metadata.len();
+            }
+        } else if path.is_dir() {
+            let (sub_files, sub_bytes) = count_dir_contents(&path)?;
+            file_count += sub_files;
+            total_bytes += sub_bytes;
+        }
+    }
+
+    Ok((file_count, total_bytes))
+}
+
+fn background_copy_file(
+    file: &files::File,
+    dest_dir: &PathBuf,
+    progress: &Arc<Mutex<PasteProgress>>,
+) -> Result<(), io::Error> {
+    let dest_path = dest_dir.join(&file.name);
+    
+    // Update progress with current file
+    {
+        let mut prog = progress.lock().unwrap();
+        prog.current_file = file.name.clone();
+    }
+
+    // Copy file with progress tracking
+    let mut source = fs::File::open(&file.path)?;
+    let mut destination = fs::File::create(&dest_path)?;
+    
+    let mut buffer = vec![0; 8192]; // 8KB buffer
+    
+    loop {
+        let bytes_read = source.read(&mut buffer)?;
+        if bytes_read == 0 {
+            break;
+        }
+        
+        destination.write_all(&buffer[..bytes_read])?;
+        
+        // Update progress
+        {
+            let mut prog = progress.lock().unwrap();
+            prog.bytes_done += bytes_read as u64;
+        }
+    }
+
+    // Update file completion
+    {
+        let mut prog = progress.lock().unwrap();
+        prog.files_done += 1;
+    }
+
+    Ok(())
+}
+
+fn background_move_file(
+    file: &files::File,
+    dest_dir: &PathBuf,
+    progress: &Arc<Mutex<PasteProgress>>,
+) -> Result<(), io::Error> {
+    let dest_path = dest_dir.join(&file.name);
+    
+    // Update progress with current file
+    {
+        let mut prog = progress.lock().unwrap();
+        prog.current_file = file.name.clone();
+    }
+
+    // Try to rename first (fast move within same filesystem)
+    match fs::rename(&file.path, &dest_path) {
+        Ok(_) => {
+            // Update progress
+            let mut prog = progress.lock().unwrap();
+            prog.files_done += 1;
+            if let Ok(metadata) = dest_path.metadata() {
+                prog.bytes_done += metadata.len();
+            }
+            Ok(())
+        }
+        Err(_) => {
+            // Fall back to copy + delete
+            background_copy_file(file, dest_dir, progress)?;
+            fs::remove_file(&file.path)?;
+            Ok(())
+        }
+    }
+}
+
+fn background_copy_dir(
+    source_dir: &dirs::Directory,
+    dest_dir: &PathBuf,
+    progress: &Arc<Mutex<PasteProgress>>,
+) -> Result<(), io::Error> {
+    let new_dir_path = dest_dir.join(&source_dir.name);
+    fs::create_dir_all(&new_dir_path)?;
+
+    for entry in fs::read_dir(&source_dir.path)? {
+        let entry = entry?;
+        let path = entry.path();
+        
+        if path.is_file() {
+            if let Ok(file) = files::File::new(&path) {
+                background_copy_file(&file, &new_dir_path, progress)?;
+            }
+        } else if path.is_dir() {
+            if let Ok(dir) = dirs::Directory::new(&path) {
+                background_copy_dir(&dir, &new_dir_path, progress)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn background_move_dir(
+    source_dir: &dirs::Directory,
+    dest_dir: &PathBuf,
+    progress: &Arc<Mutex<PasteProgress>>,
+) -> Result<(), io::Error> {
+    let new_dir_path = dest_dir.join(&source_dir.name);
+    
+    // Check if we're trying to move into self
+    if dest_dir.starts_with(&source_dir.path) {
+        return Err(io::Error::new(io::ErrorKind::InvalidInput, "Cannot move directory into itself"));
+    }
+
+    // Try to rename first (fast move within same filesystem)
+    match fs::rename(&source_dir.path, &new_dir_path) {
+        Ok(_) => {
+            // Update progress for all files in the moved directory
+            if let Ok((files, bytes)) = count_dir_contents(&new_dir_path) {
+                let mut prog = progress.lock().unwrap();
+                prog.files_done += files;
+                prog.bytes_done += bytes;
+            }
+            Ok(())
+        }
+        Err(_) => {
+            // Fall back to copy + delete
+            background_copy_dir(source_dir, dest_dir, progress)?;
+            fs::remove_dir_all(&source_dir.path)?;
+            Ok(())
+        }
+    }
+}
+
+fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
+    // Create a progress popup area
+    let progress_area = centered_rect(70, 20, frame.area());
+    
+    // Clear the area first
+    frame.render_widget(Clear, progress_area);
+    
+    // Calculate progress percentages
+    let file_progress = if progress.total_files > 0 {
+        (progress.files_done as f64 / progress.total_files as f64 * 100.0) as u16
+    } else {
+        0
+    };
+    
+    let byte_progress = if progress.total_bytes > 0 {
+        (progress.bytes_done as f64 / progress.total_bytes as f64 * 100.0) as u16
+    } else {
+        0
+    };
+
+    // Create layout for progress bars
+    let progress_layout = Layout::new(
+        Direction::Vertical,
+        [
+            Constraint::Length(2), // Current file
+            Constraint::Length(2), // File progress bar
+            Constraint::Length(2), // Byte progress bar
+            Constraint::Min(0),    // Padding
+        ],
+    )
+    .split(progress_area);
+
+    // Current file info
+    let current_file_text = if progress.current_file.is_empty() {
+        "Preparing...".to_string()
+    } else {
+        format!("Copying: {}", progress.current_file)
+    };
+    
+    frame.render_widget(
+        Paragraph::new(current_file_text)
+            .block(
+                Block::default()
+                    .title("📋 Paste Operation")
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Green))
+            )
+            .style(Style::default().fg(Color::White))
+            .alignment(Alignment::Center),
+        progress_layout[0],
+    );
+
+    // File progress bar
+    frame.render_widget(
+        Gauge::default()
+            .block(
+                Block::default()
+                    .title(format!("Files: {}/{}", progress.files_done, progress.total_files))
+                    .borders(Borders::ALL)
+            )
+            .gauge_style(Style::default().fg(Color::Cyan))
+            .percent(file_progress)
+            .label(format!("{}%", file_progress)),
+        progress_layout[1],
+    );
+
+    // Byte progress bar
+    let bytes_text = format!(
+        "Data: {}/{}",
+        format_bytes(progress.bytes_done),
+        format_bytes(progress.total_bytes)
+    );
+    
+    frame.render_widget(
+        Gauge::default()
+            .block(
+                Block::default()
+                    .title(bytes_text)
+                    .borders(Borders::ALL)
+            )
+            .gauge_style(Style::default().fg(Color::Green))
+            .percent(byte_progress)
+            .label(format!("{}%", byte_progress)),
+        progress_layout[2],
+    );
+}
+
+fn format_bytes(bytes: u64) -> String {
+    const UNITS: &[&str] = &["B", "KB", "MB", "GB", "TB"];
+    
+    if bytes == 0 {
+        return "0 B".to_string();
+    }
+    
+    let mut size = bytes as f64;
+    let mut unit_index = 0;
+    
+    while size >= 1024.0 && unit_index < UNITS.len() - 1 {
+        size /= 1024.0;
+        unit_index += 1;
+    }
+    
+    if unit_index == 0 {
+        format!("{} {}", bytes, UNITS[unit_index])
+    } else {
+        format!("{:.1} {}", size, UNITS[unit_index])
+    }
 }
