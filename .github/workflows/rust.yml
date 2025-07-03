@@ -9,19 +9,34 @@ jobs:
   build:
     name: Build and Release Binary
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: actions-rs/toolchain@v1
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo dependencies
+        uses: actions/cache@v3
         with:
-          toolchain: stable
-          override: true
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
       - name: Build project
         run: cargo build --release
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "VERSION=$VERSION" >> $GITHUB_OUTPUT
+          echo "TAG_NAME=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
 
       - name: Package binary
         run: |
@@ -29,11 +44,28 @@ jobs:
           cp target/release/fileio dist/
           chmod +x dist/fileio
           cd dist
-          tar -czvf "${{ github.ref_name }}-linux-x86_64.tar.gz" fileio
+          tar -czvf "fileio-${{ steps.get_version.outputs.VERSION }}-linux-x86_64.tar.gz" fileio
 
-      - name: Upload to GitHub Release
+      - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
           files: dist/*.tar.gz
+          name: "Release ${{ steps.get_version.outputs.TAG_NAME }}"
+          body: |
+            ## Changes
+            
+            Binary release for ${{ steps.get_version.outputs.TAG_NAME }}
+            
+            ## Installation
+            
+            Download the appropriate binary for your platform and extract it:
+            
+            ```bash
+            tar -xzf fileio-${{ steps.get_version.outputs.VERSION }}-linux-x86_64.tar.gz
+            chmod +x fileio
+            ./fileio
+            ```
+          draft: false
+          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
