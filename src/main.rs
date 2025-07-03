@@ -8,7 +8,7 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{prelude::*, widgets::*};
-use std::fs;
+use std::{fs, os::unix::process};
 use std::io::{self, Write, BufReader, BufRead, Read};
 use std::path::{Path, PathBuf};
 use Dirs::dirs;
@@ -142,6 +142,7 @@ fn main() -> io::Result<()> {
     let mut pins: &mut Vec<Entry> = &mut pins_vec; // pinned entries
     let mut pin_selection: usize = 0; // current selection in pins
     let mut show_pins_popup: bool = false; // flag to show pins popup
+    let mut show_progress_popup: bool = false; // flag to show progress popup manually
 
     let paste_progress = Arc::new(Mutex::new(PasteProgress::default()));
 
@@ -152,7 +153,7 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup, &paste_progress))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup, &paste_progress, &mut show_progress_popup))?;
         should_quit = handle_events(
             selections,
             contains,
@@ -163,6 +164,7 @@ fn main() -> io::Result<()> {
             &mut pin_selection,
             &mut show_pins_popup,
             &paste_progress,
+            &mut show_progress_popup,
         )?;
         unsafe {
             if CLEAR {
@@ -193,6 +195,7 @@ fn handle_events(
     pin_selection: &mut usize,
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
+    show_progress_popup: &mut bool,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
@@ -200,7 +203,13 @@ fn handle_events(
                 //if the user not trying to input text
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') {
                     //quit
-                    return Ok(true);
+                    if !paste_progress.lock().unwrap().is_active {
+                        return Ok(true);
+                    }
+                    else if !(*show_progress_popup) {
+                        // if progress popup is open, close it
+                        *show_progress_popup = true;
+                    }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down
                     || key.code == KeyCode::Char('j')
@@ -413,6 +422,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('p') {
                     // pastes buffer the Entry
                     if !buffer_state.1.is_empty() {
+                        *show_progress_popup = true; // show progress popup
                         start_background_paste(buffer_state.1.clone(), selections.1.path.clone(), paste_progress.clone());
                         buffer_state.1.clear(); //clear the buffer
                     }
@@ -475,9 +485,11 @@ fn handle_events(
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Esc {
-                    // close pins popup
+                    // close pins popup or progress popup
                     if *show_pins_popup {
                         *show_pins_popup = false;
+                    } else if *show_progress_popup {
+                        *show_progress_popup = false;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('U') {
@@ -493,6 +505,10 @@ fn handle_events(
                             *pin_selection = 0;
                         }
                     }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('T') {
+                    // toggle progress popup
+                    *show_progress_popup = !*show_progress_popup;
                 }
             } else {
                 //if we are in input mode
@@ -577,6 +593,7 @@ fn ui(
     pin_selection: &mut usize,
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
+    show_progress_popup: &mut bool,
 ) {
     let commands = vec![
         Row::new([
@@ -601,8 +618,9 @@ fn ui(
             "('o'   :  pins popup )",
         ]),
         Row::new(["('r'   :  rename )", "", "", "('/'  :  search )" , "('U'   :  remove pin )"]),
-        Row::new(["" , "" , "" ,  "('N'   :  prev search)"  ]),
+        Row::new(["" , "" , "" ,  "('N'   :  prev search)" , ]),
         Row::new(["" , "" , "", "('n'   :  next search)",  ]),
+        Row::new(["" , "" , "", "('T'   :  toggle progress popup)", ]),
     ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
@@ -739,9 +757,9 @@ fn ui(
         render_pins_popup(frame, pins, pin_selection);
     }
 
-    // Render paste progress if active
+    // Render paste progress if toggled
     if let Ok(progress) = paste_progress.lock() {
-        if progress.is_active {
+        if *show_progress_popup {
             render_paste_progress(frame, &progress);
         }
     }
@@ -1182,10 +1200,29 @@ fn background_move_dir(
 
 fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     // Create a progress popup area
-    let progress_area = centered_rect(70, 20, frame.area());
+    let progress_area = centered_rect(70, 25, frame.area());
     
     // Clear the area first
     frame.render_widget(Clear, progress_area);
+    
+    // Check if operation is active
+    if !progress.is_active && progress.total_files == 0 {
+        // Show "no operation" message when manually opened
+        frame.render_widget(
+            Paragraph::new("No paste operation in progress.\n\nPress 'p' to start pasting files from buffer.\nPress 'T' to close this window.")
+                .block(
+                    Block::default()
+                        .title("Paste Progress (No Operation)")
+                        .borders(Borders::ALL)
+                        .border_style(Style::default().fg(Color::Yellow))
+                )
+                .style(Style::default().fg(Color::White))
+                .alignment(Alignment::Center)
+                .wrap(Wrap { trim: true }),
+            progress_area,
+        );
+        return;
+    }
     
     // Calculate progress percentages
     let file_progress = if progress.total_files > 0 {
@@ -1204,28 +1241,38 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     let progress_layout = Layout::new(
         Direction::Vertical,
         [
-            Constraint::Length(2), // Current file
-            Constraint::Length(2), // File progress bar
-            Constraint::Length(2), // Byte progress bar
-            Constraint::Min(0),    // Padding
+            Constraint::Length(3), // Current file
+            Constraint::Length(3), // File progress bar
+            Constraint::Length(3), // Byte progress bar
+            Constraint::Min(0), // Status/instructions
         ],
     )
     .split(progress_area);
 
     // Current file info
     let current_file_text = if progress.current_file.is_empty() {
-        "Preparing...".to_string()
+        if progress.is_active {
+            "Preparing...".to_string()
+        } else {
+            "Operation completed".to_string()
+        }
     } else {
-        format!("Copying: {}", progress.current_file)
+        format!("Processing: {}", progress.current_file)
+    };
+    
+    let title = if progress.is_active {
+        "Paste Operation (In Progress)"
+    } else {
+        "Paste Operation (Completed)"
     };
     
     frame.render_widget(
         Paragraph::new(current_file_text)
             .block(
                 Block::default()
-                    .title("📋 Paste Operation")
+                    .title(title)
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Green))
+                    .border_style(Style::default().fg(if progress.is_active { Color::Green } else { Color::Blue }))
             )
             .style(Style::default().fg(Color::White))
             .alignment(Alignment::Center),
@@ -1264,6 +1311,24 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
             .percent(byte_progress)
             .label(format!("{}%", byte_progress)),
         progress_layout[2],
+    );
+
+    // Instructions
+    let instructions = if progress.is_active {
+        "Press 'Esc' or 'T' to close this window"
+    } else {
+        "Operation completed! Press 'Esc' or 'T' to close"
+    };
+    
+    frame.render_widget(
+        Paragraph::new(instructions)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+            )
+            .style(Style::default().fg(Color::White))
+            .alignment(Alignment::Center),
+        progress_layout[3],
     );
 }
 

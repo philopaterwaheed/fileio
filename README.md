@@ -48,6 +48,7 @@ https://github.com/philopaterwaheed/fileio/assets/61416026/c6ef11d2-6742-44ac-b7
 | `u` | Unpin selected file/directory|
 | `o` | Open pins popup|
 | `U` | Remove selected pin (when in popup)|
+| `T` | Toggle paste progress window|
 
 ## Pin Feature
 
@@ -83,4 +84,5 @@ sudo mv fileio /bin
     - Data transferred with size formatting (B, KB, MB, GB, TB)
     - Overall progress percentage
     
+    The progress window can be manually opened/closed with the 'T' key, and automatically appears during paste operations.
     This ensures smooth navigation while large copy/move operations are running in the background.
