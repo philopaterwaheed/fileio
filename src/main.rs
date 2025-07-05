@@ -870,6 +870,9 @@ fn update(
                         }
                         
                     }
+                    else {
+                        let _ = image_preview.load_image(path);
+                    }
                 } else {
                     selections.3 = Entry::None;
                 }
