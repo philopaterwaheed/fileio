@@ -9,3 +9,5 @@ edition = "2021"
 crossterm = "0.29.0"
 ratatui = "0.29.0"
 tokio = { version = "1.0", features = ["full"] }
+ratatui-image = "8.0.1"
+image = "0.25.0"

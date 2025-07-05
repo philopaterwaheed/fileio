@@ -8,6 +8,7 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{prelude::*, widgets::*};
+use ratatui_image::{picker::Picker, StatefulImage, protocol::StatefulProtocol};
 use std::{fs, os::unix::process};
 use std::io::{self, Write, BufReader, BufRead, Read};
 use std::path::{Path, PathBuf};
@@ -33,6 +34,59 @@ struct PasteProgress {
     bytes_done: u64,
     total_bytes: u64,
     is_active: bool,
+}
+
+struct ImagePreview {
+    image: Option<StatefulProtocol>,
+    image_path: Option<PathBuf>,
+    picker: Picker,
+}
+
+impl ImagePreview {
+    fn new() -> Self {
+        // Try to use proper picker that detects font size and protocol
+        let picker = match Picker::from_query_stdio() {
+            Ok(picker) => picker,
+            Err(_) => {
+                // Fall back to fixed font size if query fails
+                Picker::from_fontsize((8, 12))
+            }
+        };
+        
+        Self {
+            image: None,
+            picker,
+            image_path: None,
+        }
+    }
+
+    fn load_image(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+        if !is_image_file(path) {
+            return Ok(());
+        }
+
+        match image::ImageReader::open(path) {
+            Ok(reader) => {
+                match reader.decode() {
+                    Ok(dyn_img) => {
+                        let protocol = self.picker.new_resize_protocol(dyn_img);
+                        self.image = Some(protocol);
+                        self.image_path = Some(path.to_path_buf());
+                    }
+                    Err(_) => {
+                    }
+                }
+            }
+            Err(_) => {
+            }
+        }
+        Ok(())
+    }
+
+    fn clear(&mut self) {
+        self.image = None;
+        self.image_path = None;
+    }
 }
 
 impl Default for PasteProgress {
@@ -145,15 +199,16 @@ fn main() -> io::Result<()> {
     let mut show_progress_popup: bool = false; // flag to show progress popup manually
 
     let paste_progress = Arc::new(Mutex::new(PasteProgress::default()));
+    let mut image_preview = ImagePreview::new(); // Add image preview state
 
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 
     let mut should_quit = false;
-    update(selections, contains);
+    update(selections, contains, &mut image_preview);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup, &paste_progress, &mut show_progress_popup))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup, &paste_progress, &mut show_progress_popup, &mut image_preview))?;
         should_quit = handle_events(
             selections,
             contains,
@@ -165,6 +220,7 @@ fn main() -> io::Result<()> {
             &mut show_pins_popup,
             &paste_progress,
             &mut show_progress_popup,
+            &mut image_preview,
         )?;
         unsafe {
             if CLEAR {
@@ -196,6 +252,7 @@ fn handle_events(
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
     show_progress_popup: &mut bool,
+    image_preview: &mut ImagePreview,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
@@ -535,7 +592,7 @@ fn handle_events(
                 }
             }
         }
-        update(selections, contains);
+        update(selections, contains, image_preview);
     }
     Ok(false)
 }
@@ -594,6 +651,7 @@ fn ui(
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
     show_progress_popup: &mut bool,
+    image_preview: &mut ImagePreview,
 ) {
     let commands = vec![
         Row::new([
@@ -689,7 +747,15 @@ fn ui(
     match &selections.3 {
         // the content of selected
         Entry::file(f) => {
-            if let Ok(contents) = f.read() {
+            // Check if the file is an image and we have a preview
+            if let  Some(image_path) = image_preview.image_path.clone(){
+                if f.path == image_path && image_preview.image.is_some() {
+                    // Render image preview
+                    render_image_preview(frame, inner_layout[2], image_preview);
+                }
+            }
+            else if let Ok(contents) = f.read() {
+                // Render text content for non-image files
                 render_list(
                     frame,
                     inner_layout[2],
@@ -768,6 +834,7 @@ fn ui(
 fn update(
     selections: &mut (usize, &mut dirs::Directory, usize, Entry),
     contains: &mut (Vec<PathBuf>, Vec<String>),
+    image_preview: &mut ImagePreview,
 ) {
     // updates the selected entry
     if let Ok(temp) = selections.1.vec_of_contains() {
@@ -792,9 +859,17 @@ fn update(
                 } else {
                     selections.3 = Entry::None; // setting it to a None just as a place holder
                 }
+                image_preview.clear(); // Clear image preview for directories
             } else if path.is_file() {
                 if let Ok(new) = files::File::new(path) {
                     selections.3 = Entry::file(new); // setting it to the file
+                    // Try to load image preview if it's an image file
+                    if let Some(image_path) = &image_preview.image_path {
+                        if image_path != path {
+                            let _ = image_preview.load_image(path);
+                        }
+                        
+                    }
                 } else {
                     selections.3 = Entry::None;
                 }
@@ -1351,5 +1426,46 @@ fn format_bytes(bytes: u64) -> String {
         format!("{} {}", bytes, UNITS[unit_index])
     } else {
         format!("{:.1} {}", size, UNITS[unit_index])
+    }
+}
+
+fn is_image_file(path: &Path) -> bool {
+    if let Some(extension) = path.extension() {
+        if let Some(ext_str) = extension.to_str() {
+            let ext_lower = ext_str.to_lowercase();
+            matches!(ext_lower.as_str(), "jpg" | "jpeg" | "png" | "gif" | "bmp" | "webp" | "tiff" | "tif" | "ico" | "svg")
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+fn render_image_preview(frame: &mut Frame, rect: Rect, image_preview: &mut ImagePreview) {
+    if let Some(ref mut protocol) = image_preview.image {
+        // Create the image widget
+        let image_widget = StatefulImage::default();
+        
+        // Render the image with a border and title
+        let image_block = Block::default()
+            .title("Image Preview")
+            .borders(Borders::ALL)
+            .style(Style::new().blue().fg(Color::White).bg(Color::Black));
+        
+        let inner_rect = image_block.inner(rect);
+        frame.render_widget(image_block, rect);
+        
+        // Render the image within the bordered area
+        frame.render_stateful_widget(image_widget, inner_rect, protocol);
+        
+        // Handle encoding result to avoid issues
+        if let Some(Err(_)) = protocol.last_encoding_result() {
+            // If encoding failed, show error message
+            let error_text = Paragraph::new("Failed to render image")
+                .style(Style::default().fg(Color::Red))
+                .alignment(Alignment::Center);
+            frame.render_widget(error_text, inner_rect);
+        }
     }
 }
