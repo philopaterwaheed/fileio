@@ -932,7 +932,7 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
             .style(Style::new().blue().fg(Color::White).bg(Color::Black))
             .block(Block::default().title("commands").borders(Borders::ALL))
             .header(
-                Row::new(vec!["atler", "ccp", "buffer", "controls" , "pin"]).style(
+                Row::new(vec!["alter", "ccp", "buffer", "controls" , "pin"]).style(
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
@@ -964,8 +964,8 @@ fn render_pins_popup(frame: &mut Frame, pins: &mut Vec<Entry>, pin_selection: &m
     } else {
         for (_i, pin) in pins.iter().enumerate() {
             let pin_name = match pin {
-                Entry::dir(d) => format!("📁 {}", d.name),
-                Entry::file(f) => format!("📄 {}", f.name),
+                Entry::dir(d) => format!("📁 {} => {}", d.name , d.path.display()),
+                Entry::file(f) => format!("📄 {} => {}", f.name, f.path.display()),
                 Entry::None => "".to_string(),
             };
             pins_display.push(pin_name);
