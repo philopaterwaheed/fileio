@@ -9,9 +9,10 @@ use crossterm::{
 };
 use ratatui::{prelude::*, widgets::*};
 use ratatui_image::{picker::Picker, StatefulImage, protocol::StatefulProtocol};
-use std::{fs, os::unix::process};
+use std::{fs};
 use std::io::{self, Write, BufReader, BufRead, Read};
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use Dirs::dirs;
 use Files::files;
 use std::process::{Stdio,Command};
@@ -24,6 +25,200 @@ enum Entry {
     file(files::File),
     dir(dirs::Directory),
     None, // for empty dirs they don't have Entries in them
+}
+
+#[derive(Debug, Clone)]
+struct PinnedEntry {
+    entry: Entry,
+    category: String,
+}
+
+#[derive(Debug, Clone)]
+struct CategoryManager {
+    pins: Vec<PinnedEntry>,
+    
+    category_to_entries: HashMap<String, Vec<usize>>,
+    entry_path_to_index: HashMap<PathBuf, usize>,
+    categories: Vec<String>,
+    category_counts: HashMap<String, usize>,
+}
+
+impl CategoryManager {
+    fn new() -> Self {
+        Self {
+            pins: Vec::new(),
+            category_to_entries: HashMap::new(),
+            entry_path_to_index: HashMap::new(),
+            categories: vec!["Default".to_string()],
+            category_counts: HashMap::new(),
+        }
+    }
+    
+    fn from_pins(pins: Vec<PinnedEntry>) -> Self {
+        let mut manager = Self::new();
+        manager.pins = pins;
+        manager.rebuild_indices();
+        manager
+    }
+    
+    fn rebuild_indices(&mut self) {
+        self.category_to_entries.clear();
+        self.entry_path_to_index.clear();
+        self.category_counts.clear();
+        
+        for (index, pin) in self.pins.iter().enumerate() {
+            self.category_to_entries
+                .entry(pin.category.clone())
+                .or_insert_with(Vec::new)
+                .push(index);
+            
+            let path = match &pin.entry {
+                Entry::file(f) => f.path.clone(),
+                Entry::dir(d) => d.path.clone(),
+                Entry::None => continue,
+            };
+            self.entry_path_to_index.insert(path, index);
+            
+            *self.category_counts.entry(pin.category.clone()).or_insert(0) += 1;
+        }
+        
+        let mut categories: Vec<String> = self.category_to_entries.keys().cloned().collect();
+        categories.sort();
+        if categories.is_empty() {
+            categories.push("Default".to_string());
+        }
+        self.categories = categories;
+    }
+    
+    fn add_pin(&mut self, entry: Entry, category: String) {
+        let path = match &entry {
+            Entry::file(f) => f.path.clone(),
+            Entry::dir(d) => d.path.clone(),
+            Entry::None => return,
+        };
+        
+        if self.entry_path_to_index.contains_key(&path) {
+            return;
+        }
+        
+        let index = self.pins.len();
+        let pin = PinnedEntry { entry, category: category.clone() };
+        
+        self.pins.push(pin);
+        
+        self.category_to_entries
+            .entry(category.clone())
+            .or_insert_with(Vec::new)
+            .push(index);
+        
+        self.entry_path_to_index.insert(path, index);
+        
+        *self.category_counts.entry(category.clone()).or_insert(0) += 1;
+        
+        if !self.categories.contains(&category) {
+            self.categories.push(category);
+            self.categories.sort();
+        }
+    }
+    
+    fn remove_pin_by_path(&mut self, path: &PathBuf) -> bool {
+        if let Some(&index) = self.entry_path_to_index.get(path) {
+            let pin = &self.pins[index];
+            let category = pin.category.clone();
+            
+            self.pins.remove(index);
+            
+            self.rebuild_indices();
+            
+            if !self.category_counts.contains_key(&category) || self.category_counts[&category] == 0 {
+                self.categories.retain(|c| c != &category);
+            }
+            
+            true
+        } else {
+            false
+        }
+    }
+    
+    fn change_category(&mut self, pin_index: usize, new_category: String) {
+        if pin_index >= self.pins.len() {
+            return;
+        }
+        
+        self.pins[pin_index].category = new_category.clone();
+        
+        self.rebuild_indices();
+    }
+    
+    fn get_categories(&self) -> &Vec<String> {
+        &self.categories
+    }
+    
+    fn get_category_count(&self, category: &str) -> usize {
+        self.category_counts.get(category).copied().unwrap_or(0)
+    }
+    
+    fn get_entries_in_category(&self, category: &str) -> Vec<PinnedEntry> {
+        if let Some(indices) = self.category_to_entries.get(category) {
+            indices.iter()
+                .filter_map(|&i| self.pins.get(i))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+    
+    fn search_entries_in_category(&self, category: &str, query: &str) -> Vec<PinnedEntry> {
+        if let Some(indices) = self.category_to_entries.get(category) {
+            indices.iter()
+                .filter_map(|&i| self.pins.get(i))
+                .filter(|pin| entry_contains_query(&pin.entry, query))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        }
+    }
+    
+    fn pin_exists(&self, entry: &Entry) -> bool {
+        let path = match entry {
+            Entry::file(f) => &f.path,
+            Entry::dir(d) => &d.path,
+            Entry::None => return false,
+        };
+        self.entry_path_to_index.contains_key(path)
+    }
+    
+    fn find_pin_index_by_entry(&self, entry: &Entry) -> Option<usize> {
+        let path = match entry {
+            Entry::file(f) => &f.path,
+            Entry::dir(d) => &d.path,
+            Entry::None => return None,
+        };
+        self.entry_path_to_index.get(path).copied()
+    }
+    
+    fn get_pins(&self) -> &Vec<PinnedEntry> {
+        &self.pins
+    }
+    
+    fn get_pins_mut(&mut self) -> &mut Vec<PinnedEntry> {
+        &mut self.pins
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CategoryState {
+    selected_category: usize,
+    entries_in_category: Vec<PinnedEntry>,
+    selected_entry: usize,
+    show_categories: bool,
+    search_mode: bool,
+    search_query: String,
+    category_input_mode: bool,
+    category_input: String,
+    entry_to_change: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -114,18 +309,18 @@ fn get_pins_file_path() -> PathBuf {
 }
 
 // Function to save pins to file
-fn save_pins(pins: &Vec<Entry>) -> io::Result<()> {
+fn save_pins(category_manager: &CategoryManager) -> io::Result<()> {
     let pins_file = get_pins_file_path();
     // clears if it exists
     let mut file = fs::File::create(&pins_file)?;
     
-    for pin in pins {
-        match pin {
+    for pin in category_manager.get_pins() {
+        match &pin.entry {
             Entry::dir(d) => {
-                writeln!(file, "dir:{}", d.path.to_string_lossy())?;
+                writeln!(file, "dir:{}:{}", pin.category, d.path.to_string_lossy())?;
             }
             Entry::file(f) => {
-                writeln!(file, "file:{}", f.path.to_string_lossy())?;
+                writeln!(file, "file:{}:{}", pin.category, f.path.to_string_lossy())?;
             }
             Entry::None => {}
         }
@@ -134,12 +329,12 @@ fn save_pins(pins: &Vec<Entry>) -> io::Result<()> {
 }
 
 // Function to load pins from file
-fn load_pins() -> io::Result<Vec<Entry>> {
+fn load_pins() -> io::Result<CategoryManager> {
     let pins_file = get_pins_file_path();
     let mut pins = Vec::new();
     
     if !pins_file.exists() {
-        return Ok(pins);
+        return Ok(CategoryManager::new());
     }
     
     let file = fs::File::open(&pins_file)?;
@@ -147,29 +342,61 @@ fn load_pins() -> io::Result<Vec<Entry>> {
     
     for line in reader.lines() {
         let line = line?;
-        if let Some((entry_type, path_str)) = line.split_once(':') {
+        let parts: Vec<&str> = line.splitn(3, ':').collect();
+        if parts.len() == 3 {
+            let entry_type = parts[0];
+            let category = parts[1].to_string();
+            let path_str = parts[2];
             let path = PathBuf::from(path_str);
             
             // Only add pins that still exist
             if path.exists() {
-                match entry_type {
+                let entry = match entry_type {
                     "dir" => {
                         if let Ok(dir) = dirs::Directory::new(&path) {
-                            pins.push(Entry::dir(dir));
-                        }
+                            Some(Entry::dir(dir))
+                        } else { None }
                     }
                     "file" => {
                         if let Ok(file) = files::File::new(&path) {
-                            pins.push(Entry::file(file));
-                        }
+                            Some(Entry::file(file))
+                        } else { None }
                     }
-                    _ => {} // Ignore invalid entries
+                    _ => None
+                };
+                
+                if let Some(entry) = entry {
+                    pins.push(PinnedEntry { entry, category });
                 }
             }
         }
     }
     
-    Ok(pins)
+    Ok(CategoryManager::from_pins(pins))
+}
+
+fn entry_contains_query(entry: &Entry, query: &str) -> bool {
+    match entry {
+        Entry::dir(d) => d.name.to_lowercase().contains(&query.to_lowercase()),
+        Entry::file(f) => f.name.to_lowercase().contains(&query.to_lowercase()),
+        Entry::None => false,
+    }
+}
+
+impl Default for CategoryState {
+    fn default() -> Self {
+        Self {
+            selected_category: 0,
+            entries_in_category: Vec::new(),
+            selected_entry: 0,
+            show_categories: true,
+            search_mode: false,
+            search_query: String::new(),
+            category_input_mode: false,
+            category_input: String::new(),
+            entry_to_change: None,
+        }
+    }
 }
 
 fn main() -> io::Result<()> {
@@ -192,9 +419,8 @@ fn main() -> io::Result<()> {
     let mut search: (&mut Vec<usize>, usize, &mut String) =
         (&mut Vec::new(), 0, &mut String::new()); // the search results indexs and the selected index
 
-    let mut pins_vec = load_pins().unwrap_or_else(|_| Vec::new()); // load pins or create empty vec
-    let mut pins: &mut Vec<Entry> = &mut pins_vec; // pinned entries
-    let mut pin_selection: usize = 0; // current selection in pins
+    let mut category_manager = load_pins().unwrap_or_else(|_| CategoryManager::new()); // load pins or create empty manager
+    let mut category_state = CategoryState::default();
     let mut show_pins_popup: bool = false; // flag to show pins popup
     let mut show_progress_popup: bool = false; // flag to show progress popup manually
 
@@ -208,15 +434,15 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains, &mut image_preview);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, pins, &mut pin_selection, &mut show_pins_popup, &paste_progress, &mut show_progress_popup, &mut image_preview))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_pins_popup, &paste_progress, &mut show_progress_popup, &mut image_preview))?;
         should_quit = handle_events(
             selections,
             contains,
             &mut input_state,
             &mut buffer_state,
             &mut search,
-            pins,
-            &mut pin_selection,
+            &mut category_manager,
+            &mut category_state,
             &mut show_pins_popup,
             &paste_progress,
             &mut show_progress_popup,
@@ -232,8 +458,7 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // eartave pins before exiting
-    let _ = save_pins(pins);
+    let _ = save_pins(&category_manager);
 
     disable_raw_mode()?;
     std::io::stdout().execute(LeaveAlternateScreen)?;
@@ -247,8 +472,8 @@ fn handle_events(
     input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
     search: &mut (&mut Vec<usize>, usize, &mut String),
-    pins: &mut Vec<Entry>,
-    pin_selection: &mut usize,
+    category_manager: &mut CategoryManager,
+    category_state: &mut CategoryState,
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
     show_progress_popup: &mut bool,
@@ -256,6 +481,93 @@ fn handle_events(
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
         if let Event::Key(key) = event::read()? {
+            if category_state.category_input_mode {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        category_state.category_input.push(c);
+                    }
+                    KeyCode::Enter => {
+                        if let Some(entry_idx) = category_state.entry_to_change {
+                            if entry_idx < category_manager.get_pins().len() {
+                                category_manager.change_category(entry_idx, category_state.category_input.clone());
+                                let _ = save_pins(category_manager);
+                                
+                                let categories = category_manager.get_categories();
+                                if let Some(cat_idx) = categories.iter().position(|c| c == &category_state.category_input) {
+                                    category_state.selected_category = cat_idx;
+                                }
+                                category_state.entries_in_category = category_manager.get_entries_in_category(&categories[category_state.selected_category]);
+                            }
+                        }
+                        category_state.category_input_mode = false;
+                        category_state.category_input.clear();
+                        category_state.entry_to_change = None;
+                    }
+                    KeyCode::Backspace => {
+                        category_state.category_input.pop();
+                    }
+                    KeyCode::Esc => {
+                        category_state.category_input_mode = false;
+                        category_state.category_input.clear();
+                        category_state.entry_to_change = None;
+                    }
+                    _ => {}
+                }
+                return Ok(false);
+            }
+            
+            // Handle search mode in pins popup
+            if *show_pins_popup && category_state.search_mode {
+                match key.code {
+                    KeyCode::Char(c) => {
+                        category_state.search_query.push(c);
+                        if !category_state.search_query.is_empty() {
+                            let categories = category_manager.get_categories();
+                            category_state.entries_in_category = category_manager.search_entries_in_category(
+                                &categories[category_state.selected_category], 
+                                &category_state.search_query
+                            );
+                        } else {
+                            let categories = category_manager.get_categories();
+                            category_state.entries_in_category = category_manager.get_entries_in_category(
+                                &categories[category_state.selected_category]
+                            );
+                        }
+                        category_state.selected_entry = 0;
+                    }
+                    KeyCode::Enter => {
+                        category_state.search_mode = false;
+                        category_state.search_query.clear();
+                    }
+                    KeyCode::Backspace => {
+                        category_state.search_query.pop();
+                        if !category_state.search_query.is_empty() {
+                            let categories = category_manager.get_categories();
+                            category_state.entries_in_category = category_manager.search_entries_in_category(
+                                &categories[category_state.selected_category], 
+                                &category_state.search_query
+                            );
+                        } else {
+                            let categories = category_manager.get_categories();
+                            category_state.entries_in_category = category_manager.get_entries_in_category(
+                                &categories[category_state.selected_category]
+                            );
+                        }
+                        category_state.selected_entry = 0;
+                    }
+                    KeyCode::Esc => {
+                        category_state.search_mode = false;
+                        category_state.search_query.clear();
+                        let categories = category_manager.get_categories();
+                        category_state.entries_in_category = category_manager.get_entries_in_category(
+                            &categories[category_state.selected_category]
+                        );
+                    }
+                    _ => {}
+                }
+                return Ok(false);
+            }
+            
             if !*(input_state.0/* mode of input */) {
                 //if the user not trying to input text
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') {
@@ -272,9 +584,19 @@ fn handle_events(
                     || key.code == KeyCode::Char('j')
                 {
                     if *show_pins_popup {
-                        // navigate in pins popup
-                        if !pins.is_empty() && *pin_selection + 1 < pins.len() {
-                            *pin_selection += 1;
+                        if category_state.show_categories {
+                            // navigate in categories
+                            let categories = category_manager.get_categories();
+                            if category_state.selected_category + 1 < categories.len() {
+                                category_state.selected_category += 1;
+                                category_state.entries_in_category = category_manager.get_entries_in_category(&categories[category_state.selected_category]);
+                                category_state.selected_entry = 0;
+                            }
+                        } else {
+                            // navigate in entries
+                            if category_state.selected_entry + 1 < category_state.entries_in_category.len() {
+                                category_state.selected_entry += 1;
+                            }
                         }
                     } else {
                         // normal file navigation
@@ -287,9 +609,19 @@ fn handle_events(
                     || key.code == KeyCode::Char('k')
                 {
                     if *show_pins_popup {
-                        // navigate in pins popup
-                        if !pins.is_empty() && *pin_selection > 0 {
-                            *pin_selection -= 1;
+                        if category_state.show_categories {
+                            // navigate in categories
+                            if category_state.selected_category > 0 {
+                                category_state.selected_category -= 1;
+                                let categories = category_manager.get_categories();
+                                category_state.entries_in_category = category_manager.get_entries_in_category(&categories[category_state.selected_category]);
+                                category_state.selected_entry = 0;
+                            }
+                        } else {
+                            // navigate in entries
+                            if category_state.selected_entry > 0 {
+                                category_state.selected_entry -= 1;
+                            }
                         }
                     } else {
                         // normal file navigation
@@ -301,56 +633,75 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Left
                     || key.code == KeyCode::Char('h')
                 {
-                    let _ = selections.1.up();
-                    selections.2 = selections.0;
+                    if *show_pins_popup {
+                        // Switch to categories side
+                        category_state.show_categories = true;
+                    } else {
+                        let _ = selections.1.up();
+                        selections.2 = selections.0;
+                    }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Right
                     || key.code == KeyCode::Char('l')
                 {
-                    match &selections.3 {
-                        Entry::dir(_d) => {
-                            // if the selected is a dir enter it
-                                let _ = selections.1.down(selections.2);
-                                selections.0 = selections.2;
-                                selections.2 = 0;
+                    if *show_pins_popup {
+                        // Switch to entries side
+                        category_state.show_categories = false;
+                    } else {
+                        match &selections.3 {
+                            Entry::dir(_d) => {
+                                // if the selected is a dir enter it
+                                    let _ = selections.1.down(selections.2);
+                                    selections.0 = selections.2;
+                                    selections.2 = 0;
+                            }
+                            Entry::file(f) => {
+                               let _ =  open_in_default(f.path.as_path());
+                            }
+                            Entry::None => {}
                         }
-                        Entry::file(f) => {
-                            // todo!() /* open the file with it's defualt app*/
-                           let _ =  open_in_default(f.path.as_path());
-                        }
-                        Entry::None => {}
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Tab {
+                    if *show_pins_popup {
+                        // Switch between categories and entries
+                        category_state.show_categories = !category_state.show_categories;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter
                     || key.code == KeyCode::Char('S')
                 {
                     if *show_pins_popup {
-                        // navigate to selected pin and close popup
-                        if !pins.is_empty() && *pin_selection < pins.len() {
-                            match &pins[*pin_selection] {
-                                Entry::dir(d) => {
-                                    if let Ok(new_dir) = dirs::Directory::new(&d.path) {
-                                        *selections.1 = new_dir;
-                                        selections.2 = 0;
-                                    }
-                                }
-                                Entry::file(f) => {
-                                    if let Some(parent) = f.path.parent() {
-                                        if let Ok(new_dir) = dirs::Directory::new(parent) {
+                        if category_state.show_categories {
+                            // Switch to entries side when Enter pressed on category
+                            category_state.show_categories = false;
+                        } else {
+                            // Navigate to selected pin and close popup
+                            if !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
+                                match &category_state.entries_in_category[category_state.selected_entry].entry {
+                                    Entry::dir(d) => {
+                                        if let Ok(new_dir) = dirs::Directory::new(&d.path) {
                                             *selections.1 = new_dir;
-                                            // Find the file in the directory and select it
-                                            if let Ok(contains_result) = selections.1.vec_of_contains() {
-                                                if let Some(pos) = contains_result.0.iter().position(|p| p == &f.path) {
-                                                    selections.2 = pos;
+                                            selections.2 = 0;
+                                        }
+                                    }
+                                    Entry::file(f) => {
+                                        if let Some(parent) = f.path.parent() {
+                                            if let Ok(new_dir) = dirs::Directory::new(parent) {
+                                                *selections.1 = new_dir;
+                                                if let Ok(contains_result) = selections.1.vec_of_contains() {
+                                                    if let Some(pos) = contains_result.0.iter().position(|p| p == &f.path) {
+                                                        selections.2 = pos;
+                                                    }
                                                 }
                                             }
                                         }
                                     }
+                                    Entry::None => {}
                                 }
-                                Entry::None => {}
                             }
+                            *show_pins_popup = false;
                         }
-                        *show_pins_popup = false;
                     } else {
                         // normal shell opening
                         let _ = selections.1.start_shell_in_dir();
@@ -388,11 +739,6 @@ fn handle_events(
                     // removes the Entry
                     *input_state.0 = true;
                     *input_state.2 = 3;
-                }
-                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('/') {
-                    //search current dir
-                    *input_state.0 = true;
-                    *input_state.2 = 4;
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('n') {
                     //select next search result
@@ -509,57 +855,95 @@ fn handle_events(
                     // pin current selection
                     if !matches!(selections.3, Entry::None) {
                         let pin_entry = selections.3.clone();
-                        if !pins.iter().any(|p| match (p, &pin_entry) {
-                            (Entry::dir(d1), Entry::dir(d2)) => d1.path == d2.path,
-                            (Entry::file(f1), Entry::file(f2)) => f1.path == f2.path,
-                            _ => false,
-                        }) {
-                            pins.push(pin_entry);
-                            let _ = save_pins(pins); // Save pins after adding
+                        if !category_manager.pin_exists(&pin_entry) {
+                            category_manager.add_pin(pin_entry, "Default".to_string());
+                            let _ = save_pins(category_manager);
                         }
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('u') {
                     // unpin current selection
                     if !matches!(selections.3, Entry::None) {
-                        let original_len = pins.len();
-                        pins.retain(|p| match (p, &selections.3) {
-                            (Entry::dir(d1), Entry::dir(d2)) => d1.path != d2.path,
-                            (Entry::file(f1), Entry::file(f2)) => f1.path != f2.path,
-                            _ => true,
-                        });
-                        // Save pins if any were removed
-                        if pins.len() != original_len {
-                            let _ = save_pins(pins);
+                        let path = match &selections.3 {
+                            Entry::dir(d) => &d.path,
+                            Entry::file(f) => &f.path,
+                            Entry::None => return Ok(false),
+                        };
+                        if category_manager.remove_pin_by_path(path) {
+                            let _ = save_pins(category_manager);
                         }
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('o') {
                     // toggle pins popup
                     *show_pins_popup = !*show_pins_popup;
-                    if *show_pins_popup && !pins.is_empty() {
-                        *pin_selection = 0; // reset selection when opening popup
+                    if *show_pins_popup {
+                        let categories = category_manager.get_categories();
+                        if !categories.is_empty() {
+                            category_state.selected_category = 0;
+                            category_state.entries_in_category = category_manager.get_entries_in_category(&categories[0]);
+                            category_state.selected_entry = 0;
+                            category_state.show_categories = true;
+                        }
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('/') {
+                    if *show_pins_popup {
+                        // Start search in pins popup
+                        category_state.search_mode = true;
+                        category_state.search_query.clear();
+                    } else {
+                        //search current dir
+                        *input_state.0 = true;
+                        *input_state.2 = 4;
+                    }
+                }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('c') && *show_pins_popup {
+                    if !category_state.show_categories && !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
+                        let selected_entry = &category_state.entries_in_category[category_state.selected_entry];
+                        if let Some(pin_idx) = category_manager.find_pin_index_by_entry(&selected_entry.entry) {
+                            category_state.entry_to_change = Some(pin_idx);
+                            category_state.category_input_mode = true;
+                            category_state.category_input = category_manager.get_pins()[pin_idx].category.clone();
+                        }
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Esc {
                     // close pins popup or progress popup
                     if *show_pins_popup {
                         *show_pins_popup = false;
+                        category_state.search_mode = false;
+                        category_state.search_query.clear();
                     } else if *show_progress_popup {
                         *show_progress_popup = false;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('U') {
                     // remove selected pin from pins list (when in popup)
-                    if *show_pins_popup && !pins.is_empty() && *pin_selection < pins.len() {
-                        pins.remove(*pin_selection);
-                        let _ = save_pins(pins); // Save pins after removing
+                    if *show_pins_popup && !category_state.show_categories && !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
+                        let selected_entry = &category_state.entries_in_category[category_state.selected_entry];
+                        let path = match &selected_entry.entry {
+                            Entry::dir(d) => &d.path,
+                            Entry::file(f) => &f.path,
+                            Entry::None => return Ok(false),
+                        };
                         
-                        // Adjust pin selection if needed
-                        if *pin_selection >= pins.len() && pins.len() > 0 {
-                            *pin_selection = pins.len() - 1;
-                        } else if pins.is_empty() {
-                            *pin_selection = 0;
+                        if category_manager.remove_pin_by_path(path) {
+                            let _ = save_pins(category_manager);
+                            
+                            let categories = category_manager.get_categories();
+                            if category_state.selected_category < categories.len() {
+                                category_state.entries_in_category = category_manager.get_entries_in_category(&categories[category_state.selected_category]);
+                            } else if !categories.is_empty() {
+                                category_state.selected_category = 0;
+                                category_state.entries_in_category = category_manager.get_entries_in_category(&categories[0]);
+                            }
+                            
+                            if category_state.selected_entry >= category_state.entries_in_category.len() && !category_state.entries_in_category.is_empty() {
+                                category_state.selected_entry = category_state.entries_in_category.len() - 1;
+                            } else if category_state.entries_in_category.is_empty() {
+                                category_state.selected_entry = 0;
+                            }
                         }
                     }
                 }
@@ -646,8 +1030,8 @@ fn ui(
     constants: &mut (Vec<PathBuf>, Vec<String>),
     input_state: &mut (&mut bool, &mut String, &mut usize),
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
-    pins: &mut Vec<Entry>,
-    pin_selection: &mut usize,
+    category_manager: &mut CategoryManager,
+    category_state: &mut CategoryState,
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
     show_progress_popup: &mut bool,
@@ -675,10 +1059,11 @@ fn ui(
             "('Arrows'   :  movments )",
             "('o'   :  pins popup )",
         ]),
-        Row::new(["('r'   :  rename )", "", "", "('/'  :  search )" , "('U'   :  remove pin )"]),
+        Row::new(["('r'   :  rename )", "('c'   :  change category in pins)", "", "('/'  :  search )" , "('U'   :  remove pin )"]),
         Row::new(["" , "" , "" ,  "('N'   :  prev search)" , ]),
         Row::new(["" , "" , "", "('n'   :  next search)",  ]),
         Row::new(["" , "" , "", "('T'   :  toggle progress popup)", ]),
+        Row::new(["" , "" , "", "('Tab/h/l' : switch sides in pins)", ]),
     ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
@@ -727,11 +1112,9 @@ fn ui(
     let mut no_sel = ListState::default(); // selection state of next dir just set to nothing
     let mut prev_sel = ListState::default(); // selection state of prev dir
     let mut buffer_sel = ListState::default(); // selection state of buffer
-    let mut pins_sel = ListState::default(); // selection state of pins
     sel.select(Some(selections.2)); // Select the first item initially
     prev_sel.select(Some(selections.0)); // Select the index of curr in prev
     buffer_sel.select(Some(buffer_state.0)); // Selection of buffer
-    pins_sel.select(Some(*pin_selection)); // Selection of pins
     if let Ok(d) = prev {
         // checks if the prev dir exists in case we are in /
         let prev_c = d.vec_of_contains().unwrap().1;
@@ -820,7 +1203,7 @@ fn ui(
 
     // Render pins popup if enabled
     if *show_pins_popup {
-        render_pins_popup(frame, pins, pin_selection);
+        render_pins_popup(frame, category_manager, category_state);
     }
 
     // Render paste progress if toggled
@@ -949,43 +1332,47 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
     );
 }
 
-fn render_pins_popup(frame: &mut Frame, pins: &mut Vec<Entry>, pin_selection: &mut usize) {
-    // Create a centered popup area
-    let popup_area = centered_rect(60, 40, frame.area());
+fn render_pins_popup(frame: &mut Frame, category_manager: &CategoryManager, category_state: &mut CategoryState) {
+    let popup_area = centered_rect(80, 60, frame.area());
     
     // Clear the area first
     frame.render_widget(Clear, popup_area);
     
-    // Create pins display
-    let mut pins_display: Vec<String> = Vec::new();
-    if pins.is_empty() {
-        pins_display.push("No pins available".to_string());
-        pins_display.push("Press 'P' to pin files/folders".to_string());
+    // Create layout for categories and entries
+    let main_layout = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
+        .split(popup_area);
+    
+    // Categories side
+    let mut categories_display: Vec<String> = Vec::new();
+    let categories = category_manager.get_categories();
+    if categories.is_empty() {
+        categories_display.push("No categories".to_string());
     } else {
-        for (_i, pin) in pins.iter().enumerate() {
-            let pin_name = match pin {
-                Entry::dir(d) => format!("📁 {} => {}", d.name , d.path.display()),
-                Entry::file(f) => format!("📄 {} => {}", f.name, f.path.display()),
-                Entry::None => "".to_string(),
-            };
-            pins_display.push(pin_name);
+        for category in categories {
+            let count = category_manager.get_category_count(category);
+            categories_display.push(format!("{} ({})", category, count));
         }
     }
 
-    // Create list state and select current pin
-    let mut list_state = ListState::default();
-    if !pins.is_empty() && *pin_selection < pins.len() {
-        list_state.select(Some(*pin_selection));
+    let mut categories_list_state = ListState::default();
+    if !categories.is_empty() && category_state.selected_category < categories.len() {
+        categories_list_state.select(Some(category_state.selected_category));
     }
 
-    // Render the popup
+    // Render categories list
     frame.render_stateful_widget(
-        List::new(pins_display)
+        List::new(categories_display)
             .block(
                 Block::default()
-                    .title("Pins (Enter: Go to, Esc: Close, U: Remove)")
+                    .title("Categories")
                     .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Cyan))
+                    .border_style(if category_state.show_categories {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    })
             )
             .style(Style::default().fg(Color::White).bg(Color::Black))
             .highlight_style(
@@ -993,12 +1380,97 @@ fn render_pins_popup(frame: &mut Frame, pins: &mut Vec<Entry>, pin_selection: &m
                     .add_modifier(Modifier::BOLD)
                     .add_modifier(Modifier::UNDERLINED)
                     .fg(Color::Black)
-                    .bg(Color::Cyan)
+                    .bg(if category_state.show_categories { Color::Cyan } else { Color::DarkGray })
             )
             .highlight_symbol("→ ")
             .repeat_highlight_symbol(true),
-        popup_area,
-        &mut list_state,
+        main_layout[0],
+        &mut categories_list_state,
+    );
+
+    // Entries side
+    let mut entries_display: Vec<String> = Vec::new();
+    if category_state.entries_in_category.is_empty() {
+        if category_state.search_mode && !category_state.search_query.is_empty() {
+            entries_display.push(format!("No entries found for '{}'", category_state.search_query));
+        } else {
+            entries_display.push("No entries in this category".to_string());
+        }
+    } else {
+        for entry in &category_state.entries_in_category {
+            let entry_name = match &entry.entry {
+                Entry::dir(d) => format!("📁 {} => {}", d.name, d.path.display()),
+                Entry::file(f) => format!("📄 {} => {}", f.name, f.path.display()),
+                Entry::None => "".to_string(),
+            };
+            entries_display.push(entry_name);
+        }
+    }
+
+    let mut entries_list_state = ListState::default();
+    if !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
+        entries_list_state.select(Some(category_state.selected_entry));
+    }
+
+    // Create the title for entries with search info and input
+    let entries_title = if category_state.search_mode {
+        format!("Entries - Search: {}", category_state.search_query)
+    } else if category_state.category_input_mode {
+        format!("Entries - Change Category: {}", category_state.category_input)
+    } else {
+        "Entries".to_string()
+    };
+
+    // Render entries list
+    frame.render_stateful_widget(
+        List::new(entries_display)
+            .block(
+                Block::default()
+                    .title(entries_title)
+                    .borders(Borders::ALL)
+                    .border_style(if !category_state.show_categories || category_state.search_mode || category_state.category_input_mode {
+                        Style::default().fg(Color::Cyan)
+                    } else {
+                        Style::default().fg(Color::DarkGray)
+                    })
+            )
+            .style(Style::default().fg(Color::White).bg(Color::Black))
+            .highlight_style(
+                Style::default()
+                    .add_modifier(Modifier::BOLD)
+                    .add_modifier(Modifier::UNDERLINED)
+                    .fg(Color::Black)
+                    .bg(if !category_state.show_categories || category_state.search_mode || category_state.category_input_mode { 
+                        Color::Cyan 
+                    } else { 
+                        Color::DarkGray 
+                    })
+            )
+            .highlight_symbol("→ ")
+            .repeat_highlight_symbol(true),
+        main_layout[1],
+        &mut entries_list_state,
+    );
+
+    // Add help text at the bottom
+    let help_area = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(popup_area);
+    
+    let help_text = if category_state.category_input_mode {
+        "Enter: Confirm category change | Esc: Cancel"
+    } else if category_state.search_mode {
+        "Type to search | Enter: Exit search | Esc: Cancel search"
+    } else {
+        "Tab/h/l: Switch sides | /: Search | c: Change category | Enter: Navigate | U: Remove | Esc: Close"
+    };
+    
+    frame.render_widget(
+        Paragraph::new(help_text)
+            .block(Block::default().borders(Borders::TOP))
+            .style(Style::default().fg(Color::Yellow)),
+        help_area[1],
     );
 }
 
