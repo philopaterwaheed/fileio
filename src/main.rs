@@ -21,6 +21,36 @@ use std::process::{Stdio,Command};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+const POPUP_BORDER_COLOR: Color = Color::Cyan;
+const POPUP_BACKGROUND_COLOR: Color = Color::Black;
+const POPUP_TEXT_COLOR: Color = Color::White;
+const POPUP_HIGHLIGHT_COLOR: Color = Color::Cyan;
+const POPUP_HELP_COLOR: Color = Color::Yellow;
+const POPUP_INACTIVE_COLOR: Color = Color::DarkGray;
+
+fn create_popup_block(title: &str, is_active: bool) -> Block {
+    Block::default()
+        .title(title)
+        .borders(Borders::all())
+        .border_style(Style::default().fg(if is_active { POPUP_BORDER_COLOR } else { POPUP_INACTIVE_COLOR }))
+}
+
+fn create_popup_style() -> Style {
+    Style::default().fg(POPUP_TEXT_COLOR).bg(POPUP_BACKGROUND_COLOR)
+}
+
+fn create_popup_highlight_style(is_active: bool) -> Style {
+    Style::default()
+        .add_modifier(Modifier::BOLD)
+        .add_modifier(Modifier::UNDERLINED)
+        .fg(POPUP_TEXT_COLOR)
+        .bg(if is_active { POPUP_HIGHLIGHT_COLOR } else { POPUP_INACTIVE_COLOR })
+}
+
+fn create_help_text_style() -> Style {
+    Style::default().fg(POPUP_HELP_COLOR).bg(POPUP_BACKGROUND_COLOR)
+}
+
 #[derive(Debug, Clone)]
 enum Entry {
     // all the operations will be on Entry to detrmine which funtions to use
@@ -421,11 +451,10 @@ fn main() -> io::Result<()> {
     let mut search: (&mut Vec<usize>, usize, &mut String) =
         (&mut Vec::new(), 0, &mut String::new()); // the search results indexs and the selected index
 
-    let mut category_manager = load_pins().unwrap_or_else(|_| CategoryManager::new()); // load pins or create empty manager
+    let mut category_manager = load_pins().unwrap_or_else(|_| CategoryManager::new());
     let mut category_state = CategoryState::default();
-    let mut show_pins_popup: bool = false; // flag to show pins popup
-    let mut show_progress_popup: bool = false; // flag to show progress popup manually
-    let mut show_file_info_popup: bool = false; // flag to show file info popup
+    let mut show_popups: (bool, bool, bool) = (false, false, false);
+    // pins , progress , info 
 
     let paste_progress = Arc::new(Mutex::new(PasteProgress::default()));
     let mut image_preview = ImagePreview::new(); // Add image preview state
@@ -437,7 +466,7 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains, &mut image_preview);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_pins_popup, &paste_progress, &mut show_progress_popup, &mut show_file_info_popup, &mut image_preview))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_popups, &paste_progress, &mut image_preview))?;
         should_quit = handle_events(
             selections,
             contains,
@@ -446,10 +475,8 @@ fn main() -> io::Result<()> {
             &mut search,
             &mut category_manager,
             &mut category_state,
-            &mut show_pins_popup,
+            &mut show_popups,
             &paste_progress,
-            &mut show_progress_popup,
-            &mut show_file_info_popup,
             &mut image_preview,
         )?;
         unsafe {
@@ -478,10 +505,8 @@ fn handle_events(
     search: &mut (&mut Vec<usize>, usize, &mut String),
     category_manager: &mut CategoryManager,
     category_state: &mut CategoryState,
-    show_pins_popup: &mut bool,
+    show_popups: &mut (bool, bool, bool),
     paste_progress: &Arc<Mutex<PasteProgress>>,
-    show_progress_popup: &mut bool,
-    show_file_info_popup: &mut bool,
     image_preview: &mut ImagePreview,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
@@ -522,7 +547,7 @@ fn handle_events(
             }
             
             // Handle search mode in pins popup
-            if *show_pins_popup && category_state.search_mode {
+            if show_popups.0 && category_state.search_mode {
                 match key.code {
                     KeyCode::Char(c) => {
                         category_state.search_query.push(c);
@@ -580,15 +605,15 @@ fn handle_events(
                     if !paste_progress.lock().unwrap().is_active {
                         return Ok(true);
                     }
-                    else if !(*show_progress_popup) {
-                        // if progress popup is open, close it
-                        *show_progress_popup = true;
+                    else if !(show_popups.1) {
+                        
+                        show_popups.1 = true;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Down
                     || key.code == KeyCode::Char('j')
                 {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         if category_state.show_categories {
                             // navigate in categories
                             let categories = category_manager.get_categories();
@@ -613,7 +638,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Up
                     || key.code == KeyCode::Char('k')
                 {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         if category_state.show_categories {
                             // navigate in categories
                             if category_state.selected_category > 0 {
@@ -638,7 +663,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Left
                     || key.code == KeyCode::Char('h')
                 {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         // Switch to categories side
                         category_state.show_categories = true;
                     } else {
@@ -649,7 +674,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Right
                     || key.code == KeyCode::Char('l')
                 {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         // Switch to entries side
                         category_state.show_categories = false;
                     } else {
@@ -668,7 +693,7 @@ fn handle_events(
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Tab {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         // Switch between categories and entries
                         category_state.show_categories = !category_state.show_categories;
                     }
@@ -676,7 +701,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Enter
                     || key.code == KeyCode::Char('S')
                 {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         if category_state.show_categories {
                             // Switch to entries side when Enter pressed on category
                             category_state.show_categories = false;
@@ -705,7 +730,7 @@ fn handle_events(
                                     Entry::None => {}
                                 }
                             }
-                            *show_pins_popup = false;
+                            show_popups.0 = false;
                         }
                     } else {
                         // normal shell opening
@@ -830,7 +855,7 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('p') {
                     // pastes buffer the Entry
                     if !buffer_state.1.is_empty() {
-                        *show_progress_popup = true; // show progress popup
+                        show_popups.1 = true; // show progress popup
                         start_background_paste(buffer_state.1.clone(), selections.1.path.clone(), paste_progress.clone());
                         buffer_state.1.clear(); //clear the buffer
                     }
@@ -881,8 +906,8 @@ fn handle_events(
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('o') {
                     // toggle pins popup
-                    *show_pins_popup = !*show_pins_popup;
-                    if *show_pins_popup {
+                    show_popups.0 = !show_popups.0;
+                    if show_popups.0 {
                         let categories = category_manager.get_categories();
                         if !categories.is_empty() {
                             category_state.selected_category = 0;
@@ -893,7 +918,7 @@ fn handle_events(
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('/') {
-                    if *show_pins_popup {
+                    if show_popups.0 {
                         // Start search in pins popup
                         category_state.search_mode = true;
                         category_state.search_query.clear();
@@ -903,7 +928,7 @@ fn handle_events(
                         *input_state.2 = 4;
                     }
                 }
-                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('c') && *show_pins_popup {
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('c') && show_popups.0 {
                     if !category_state.show_categories && !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
                         let selected_entry = &category_state.entries_in_category[category_state.selected_entry];
                         if let Some(pin_idx) = category_manager.find_pin_index_by_entry(&selected_entry.entry) {
@@ -916,24 +941,24 @@ fn handle_events(
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('i') {
                     // toggle file info popup for selected entry
                     if !matches!(selections.3, Entry::None) {
-                        *show_file_info_popup = !*show_file_info_popup;
+                        show_popups.2 = !show_popups.2;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Esc {
                     // close pins popup or progress popup or file info popup
-                    if *show_pins_popup {
-                        *show_pins_popup = false;
+                    if show_popups.0 {
+                        show_popups.0 = false;
                         category_state.search_mode = false;
                         category_state.search_query.clear();
-                    } else if *show_progress_popup {
-                        *show_progress_popup = false;
-                    } else if *show_file_info_popup {
-                        *show_file_info_popup = false;
+                    } else if show_popups.1 {
+                        show_popups.1 = false;
+                    } else if show_popups.2 {
+                        show_popups.2 = false;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('U') {
                     // remove selected pin from pins list (when in popup)
-                    if *show_pins_popup && !category_state.show_categories && !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
+                    if show_popups.0 && !category_state.show_categories && !category_state.entries_in_category.is_empty() && category_state.selected_entry < category_state.entries_in_category.len() {
                         let selected_entry = &category_state.entries_in_category[category_state.selected_entry];
                         let path = match &selected_entry.entry {
                             Entry::dir(d) => &d.path,
@@ -967,7 +992,7 @@ fn handle_events(
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('T') {
                     // toggle progress popup
-                    *show_progress_popup = !*show_progress_popup;
+                    show_popups.1 = !show_popups.1;
                 }
             } else {
                 //if we are in input mode
@@ -1214,10 +1239,8 @@ fn ui(
     buffer_state: &mut (usize, &mut Vec<(Entry, bool)>),
     category_manager: &mut CategoryManager,
     category_state: &mut CategoryState,
-    show_pins_popup: &mut bool,
+    show_popups: &mut (bool, bool, bool),
     paste_progress: &Arc<Mutex<PasteProgress>>,
-    show_progress_popup: &mut bool,
-    show_file_info_popup: &mut bool,
     image_preview: &mut ImagePreview,
 ) {
     let commands = vec![
@@ -1395,18 +1418,18 @@ fn ui(
     ); // the buffer
 
     // Render pins popup if enabled
-    if *show_pins_popup {
+    if show_popups.0 {
         render_pins_popup(frame, category_manager, category_state);
     }
 
     // Render file info popup if enabled
-    if *show_file_info_popup {
+    if show_popups.2 {
         render_file_info_popup(frame, selections);
     }
 
     // Render paste progress if toggled
     if let Ok(progress) = paste_progress.lock() {
-        if *show_progress_popup {
+        if show_popups.1 {
             render_paste_progress(frame, &progress);
         }
     }
@@ -1563,24 +1586,9 @@ fn render_pins_popup(frame: &mut Frame, category_manager: &CategoryManager, cate
     // Render categories list
     frame.render_stateful_widget(
         List::new(categories_display)
-            .block(
-                Block::default()
-                    .title("Categories")
-                    .borders(Borders::ALL)
-                    .border_style(if category_state.show_categories {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    })
-            )
-            .style(Style::default().fg(Color::White).bg(Color::Black))
-            .highlight_style(
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::UNDERLINED)
-                    .fg(Color::Black)
-                    .bg(if category_state.show_categories { Color::Cyan } else { Color::DarkGray })
-            )
+            .block(create_popup_block("Categories", category_state.show_categories))
+            .style(create_popup_style())
+            .highlight_style(create_popup_highlight_style(category_state.show_categories))
             .highlight_symbol("→ ")
             .repeat_highlight_symbol(true),
         main_layout[0],
@@ -1621,30 +1629,12 @@ fn render_pins_popup(frame: &mut Frame, category_manager: &CategoryManager, cate
     };
 
     // Render entries list
+    let is_entries_active = !category_state.show_categories || category_state.search_mode || category_state.category_input_mode;
     frame.render_stateful_widget(
         List::new(entries_display)
-            .block(
-                Block::default()
-                    .title(entries_title)
-                    .borders(Borders::ALL)
-                    .border_style(if !category_state.show_categories || category_state.search_mode || category_state.category_input_mode {
-                        Style::default().fg(Color::Cyan)
-                    } else {
-                        Style::default().fg(Color::DarkGray)
-                    })
-            )
-            .style(Style::default().fg(Color::White).bg(Color::Black))
-            .highlight_style(
-                Style::default()
-                    .add_modifier(Modifier::BOLD)
-                    .add_modifier(Modifier::UNDERLINED)
-                    .fg(Color::Black)
-                    .bg(if !category_state.show_categories || category_state.search_mode || category_state.category_input_mode { 
-                        Color::Cyan 
-                    } else { 
-                        Color::DarkGray 
-                    })
-            )
+            .block(create_popup_block(&entries_title, is_entries_active))
+            .style(create_popup_style())
+            .highlight_style(create_popup_highlight_style(is_entries_active))
             .highlight_symbol("→ ")
             .repeat_highlight_symbol(true),
         main_layout[1],
@@ -1667,8 +1657,8 @@ fn render_pins_popup(frame: &mut Frame, category_manager: &CategoryManager, cate
     
     frame.render_widget(
         Paragraph::new(help_text)
-            .block(Block::default().borders(Borders::TOP))
-            .style(Style::default().fg(Color::Yellow)),
+            .block(Block::default().borders(Borders::all()))
+            .style(create_help_text_style()),
         help_area[1],
     );
 }
@@ -1690,13 +1680,8 @@ fn render_file_info_popup(frame: &mut Frame, selections: &mut (usize, &mut dirs:
     
     // Create the main list
     let info_list = List::new(info_items)
-        .block(
-            Block::default()
-                .title("File Information")
-                .borders(Borders::ALL)
-                .style(Style::default().fg(Color::Cyan))
-        )
-        .style(Style::default().fg(Color::White).bg(Color::Black));
+        .block(create_popup_block("File Information", true))
+        .style(create_popup_style());
     
     // Create help text
     let help_layout = Layout::default()
@@ -1710,8 +1695,8 @@ fn render_file_info_popup(frame: &mut Frame, selections: &mut (usize, &mut dirs:
     // Render help text
     frame.render_widget(
         Paragraph::new("Press 'i' or 'Esc' to close")
-            .block(Block::default().borders(Borders::TOP))
-            .style(Style::default().fg(Color::Yellow))
+            .block(Block::default().borders(Borders::all()))
+            .style(create_help_text_style())
             .alignment(Alignment::Center),
         help_layout[1],
     );
@@ -2000,16 +1985,10 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     
     // Check if operation is active
     if !progress.is_active && progress.total_files == 0 {
-        // Show "no operation" message when manually opened
         frame.render_widget(
             Paragraph::new("No paste operation in progress.\n\nPress 'p' to start pasting files from buffer.\nPress 'T' to close this window.")
-                .block(
-                    Block::default()
-                        .title("Paste Progress (No Operation)")
-                        .borders(Borders::ALL)
-                        .border_style(Style::default().fg(Color::Yellow))
-                )
-                .style(Style::default().fg(Color::White))
+                .block(create_popup_block("Paste Progress (No Operation)", true))
+                .style(create_popup_style())
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true }),
             progress_area,
@@ -2061,13 +2040,8 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     
     frame.render_widget(
         Paragraph::new(current_file_text)
-            .block(
-                Block::default()
-                    .title(title)
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(if progress.is_active { Color::Green } else { Color::Blue }))
-            )
-            .style(Style::default().fg(Color::White))
+            .block(create_popup_block(title, true))
+            .style(create_popup_style())
             .alignment(Alignment::Center),
         progress_layout[0],
     );
@@ -2075,12 +2049,12 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     // File progress bar
     frame.render_widget(
         Gauge::default()
-            .block(
-                Block::default()
-                    .title(format!("Files: {}/{}", progress.files_done, progress.total_files))
-                    .borders(Borders::ALL)
+            .block(create_popup_block(&format!("Files: {}/{}", progress.files_done, progress.total_files), true))
+            .gauge_style(
+                Style::default()
+                    .fg(POPUP_HIGHLIGHT_COLOR)
+                    .bg(POPUP_BACKGROUND_COLOR)
             )
-            .gauge_style(Style::default().fg(Color::Cyan))
             .percent(file_progress)
             .label(format!("{}%", file_progress)),
         progress_layout[1],
@@ -2095,12 +2069,8 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     
     frame.render_widget(
         Gauge::default()
-            .block(
-                Block::default()
-                    .title(bytes_text)
-                    .borders(Borders::ALL)
-            )
-            .gauge_style(Style::default().fg(Color::Green))
+            .block(create_popup_block(&bytes_text, true))
+            .gauge_style(Style::default().fg(POPUP_HIGHLIGHT_COLOR))
             .percent(byte_progress)
             .label(format!("{}%", byte_progress)),
         progress_layout[2],
@@ -2115,11 +2085,8 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     
     frame.render_widget(
         Paragraph::new(instructions)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-            )
-            .style(Style::default().fg(Color::White))
+            .block(create_popup_block("Instructions", true))
+            .style(create_help_text_style())
             .alignment(Alignment::Center),
         progress_layout[3],
     );
