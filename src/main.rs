@@ -947,6 +947,11 @@ fn handle_events(
                         }
                     }
                 }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('m') {
+                    // change permissions
+                    *input_state.0 = true;
+                    *input_state.2 = 5;
+                }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('T') {
                     // toggle progress popup
                     *show_progress_popup = !*show_progress_popup;
@@ -1019,6 +1024,20 @@ fn input_operation_excute(
                 }
             }
         }
+        5 => {
+            // change permissions
+            if let Ok(permissions) = u32::from_str_radix(&input_state.1, 8) {
+                match &selections.3 {
+                    Entry::dir(d) => {
+                        let _ = d.perm_ch(permissions);
+                    }
+                    Entry::file(f) => {
+                        let _ = f.perm_ch(permissions);
+                    }
+                    Entry::None => {}
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -1059,8 +1078,8 @@ fn ui(
             "('Arrows'   :  movments )",
             "('o'   :  pins popup )",
         ]),
-        Row::new(["('r'   :  rename )", "", "", "('/'  :  search )" , "('U'   :  remove pin )"]),
-        Row::new(["" , "" , "" ,  "('N'   :  prev search)" , "('c'   :  change category in pins)"]),
+        Row::new(["('r'   :  rename )", "","", "('/'  :  search )" , "('U'   :  remove pin )"]),
+        Row::new(["('m'   :  change permissions )" , "" , "" ,  "('N'   :  prev search)" , "('c'   :  change category in pins)"]),
         Row::new(["" , "" , "", "('n'   :  next search)",  ]),
         Row::new(["" , "" , "", "('T'   :  toggle progress popup)", ]),
     ];
@@ -1165,10 +1184,19 @@ fn ui(
     )
     .split(main_layout[2]);
 
+    let input_title = match *input_state.2 {
+        1 => "Rename",
+        2 => "Add File",
+        3 => "Add Directory",
+        4 => "Search",
+        5 => "Change Permissions (octal, e.g., 755)",
+        _ => "Input",
+    };
+
     frame.render_widget(
         // the text input box
         Paragraph::new(input_state.1.to_owned()).block(
-            Block::default().title("input").borders(Borders::ALL).style(
+            Block::default().title(input_title).borders(Borders::ALL).style(
                 Style::new()
                     .blue()
                     .fg(if !*input_state.0 {
