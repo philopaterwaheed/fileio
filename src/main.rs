@@ -13,6 +13,8 @@ use std::{fs};
 use std::io::{self, Write, BufReader, BufRead, Read};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
+use std::os::unix::fs::MetadataExt;
+use std::time::UNIX_EPOCH;
 use Dirs::dirs;
 use Files::files;
 use std::process::{Stdio,Command};
@@ -423,6 +425,7 @@ fn main() -> io::Result<()> {
     let mut category_state = CategoryState::default();
     let mut show_pins_popup: bool = false; // flag to show pins popup
     let mut show_progress_popup: bool = false; // flag to show progress popup manually
+    let mut show_file_info_popup: bool = false; // flag to show file info popup
 
     let paste_progress = Arc::new(Mutex::new(PasteProgress::default()));
     let mut image_preview = ImagePreview::new(); // Add image preview state
@@ -434,7 +437,7 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains, &mut image_preview);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_pins_popup, &paste_progress, &mut show_progress_popup, &mut image_preview))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_pins_popup, &paste_progress, &mut show_progress_popup, &mut show_file_info_popup, &mut image_preview))?;
         should_quit = handle_events(
             selections,
             contains,
@@ -446,6 +449,7 @@ fn main() -> io::Result<()> {
             &mut show_pins_popup,
             &paste_progress,
             &mut show_progress_popup,
+            &mut show_file_info_popup,
             &mut image_preview,
         )?;
         unsafe {
@@ -477,6 +481,7 @@ fn handle_events(
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
     show_progress_popup: &mut bool,
+    show_file_info_popup: &mut bool,
     image_preview: &mut ImagePreview,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
@@ -908,14 +913,22 @@ fn handle_events(
                         }
                     }
                 }
+                if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('i') {
+                    // toggle file info popup for selected entry
+                    if !matches!(selections.3, Entry::None) {
+                        *show_file_info_popup = !*show_file_info_popup;
+                    }
+                }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Esc {
-                    // close pins popup or progress popup
+                    // close pins popup or progress popup or file info popup
                     if *show_pins_popup {
                         *show_pins_popup = false;
                         category_state.search_mode = false;
                         category_state.search_query.clear();
                     } else if *show_progress_popup {
                         *show_progress_popup = false;
+                    } else if *show_file_info_popup {
+                        *show_file_info_popup = false;
                     }
                 }
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('U') {
@@ -1043,6 +1056,156 @@ fn input_operation_excute(
     Ok(())
 }
 
+fn get_file_info(entry: &Entry) -> Vec<String> {
+    let mut info = Vec::new();
+    
+    match entry {
+        Entry::file(f) => {
+            let path = &f.path;
+            info.push(format!("File: {}", f.name));
+            info.push(format!("Path: {}", path.display()));
+            
+            if let Ok(metadata) = fs::metadata(path) {
+                // File size
+                info.push(format!("Size: {} ({})", format_bytes(metadata.len()), metadata.len()));
+                
+                // File type and permissions
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    info.push(format!("Permissions: {:o}", mode & 0o777));
+                    info.push(format!("Mode: {:o}", mode));
+                }
+                
+                // Timestamps
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
+                        let timestamp = duration.as_secs();
+                        info.push(format!("Modified: {}", format_timestamp(timestamp)));
+                    }
+                }
+                
+                if let Ok(accessed) = metadata.accessed() {
+                    if let Ok(duration) = accessed.duration_since(UNIX_EPOCH) {
+                        let timestamp = duration.as_secs();
+                        info.push(format!("Accessed: {}", format_timestamp(timestamp)));
+                    }
+                }
+                
+                if let Ok(created) = metadata.created() {
+                    if let Ok(duration) = created.duration_since(UNIX_EPOCH) {
+                        let timestamp = duration.as_secs();
+                        info.push(format!("Created: {}", format_timestamp(timestamp)));
+                    }
+                }
+                
+                // Additional Unix-specific metadata
+                #[cfg(unix)]
+                {
+                    info.push(format!("Inode: {}", metadata.ino()));
+                    info.push(format!("Device: {}", metadata.dev()));
+                    info.push(format!("Hard links: {}", metadata.nlink()));
+                    info.push(format!("UID: {}", metadata.uid()));
+                    info.push(format!("GID: {}", metadata.gid()));
+                    info.push(format!("Blocks: {}", metadata.blocks()));
+                    info.push(format!("Block size: {}", metadata.blksize()));
+                }
+                
+                // File type
+                info.push(format!("Is symlink: {}", metadata.is_symlink()));
+                info.push(format!("Read only: {}", metadata.permissions().readonly()));
+            } else {
+                info.push("Could not read file metadata".to_string());
+            }
+        }
+        Entry::dir(d) => {
+            let path = &d.path;
+            info.push(format!("Directory: {}", d.name));
+            info.push(format!("Path: {}", path.display()));
+            
+            if let Ok(metadata) = fs::metadata(path) {
+                // Directory permissions
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    let mode = metadata.permissions().mode();
+                    info.push(format!("Permissions: {:o}", mode & 0o777));
+                    info.push(format!("Mode: {:o}", mode));
+                }
+                
+                // Timestamps
+                if let Ok(modified) = metadata.modified() {
+                    if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
+                        let timestamp = duration.as_secs();
+                        info.push(format!("Modified: {}", format_timestamp(timestamp)));
+                    }
+                }
+                
+                if let Ok(accessed) = metadata.accessed() {
+                    if let Ok(duration) = accessed.duration_since(UNIX_EPOCH) {
+                        let timestamp = duration.as_secs();
+                        info.push(format!("Accessed: {}", format_timestamp(timestamp)));
+                    }
+                }
+                
+                if let Ok(created) = metadata.created() {
+                    if let Ok(duration) = created.duration_since(UNIX_EPOCH) {
+                        let timestamp = duration.as_secs();
+                        info.push(format!("Created: {}", format_timestamp(timestamp)));
+                    }
+                }
+                
+                // Additional Unix-specific metadata
+                #[cfg(unix)]
+                {
+                    info.push(format!("Inode: {}", metadata.ino()));
+                    info.push(format!("Device: {}", metadata.dev()));
+                    info.push(format!("Hard links: {}", metadata.nlink()));
+                    info.push(format!("UID: {}", metadata.uid()));
+                    info.push(format!("GID: {}", metadata.gid()));
+                }
+                
+                // Directory contents count
+                if let Ok(entries) = fs::read_dir(path) {
+                    let count = entries.count();
+                    info.push(format!("Items: {}", count));
+                }
+                
+                info.push(format!("Read only: {}", metadata.permissions().readonly()));
+            } else {
+                info.push("Could not read directory metadata".to_string());
+            }
+        }
+        Entry::None => {
+            info.push("No item selected".to_string());
+        }
+    }
+    
+    info
+}
+
+fn format_timestamp(timestamp: u64) -> String {
+    use std::process::Command;
+    
+    // Try to use the `date` command to format the timestamp
+    if let Ok(output) = Command::new("date")
+        .arg("-d")
+        .arg(&format!("@{}", timestamp))
+        .arg("+%Y-%m-%d %H:%M:%S")
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(formatted) = String::from_utf8(output.stdout) {
+                return formatted.trim().to_string();
+            }
+        }
+    }
+    
+    // Fallback to basic timestamp if date command fails
+    format!("{} (Unix timestamp)", timestamp)
+}
+
 fn ui(
     frame: &mut Frame,
     selections: &mut (usize, &mut dirs::Directory, usize, Entry),
@@ -1054,6 +1217,7 @@ fn ui(
     show_pins_popup: &mut bool,
     paste_progress: &Arc<Mutex<PasteProgress>>,
     show_progress_popup: &mut bool,
+    show_file_info_popup: &mut bool,
     image_preview: &mut ImagePreview,
 ) {
     let commands = vec![
@@ -1062,7 +1226,9 @@ fn ui(
             "('y'   :  copy )",
             "('x'   :  remove from buffer )",
             "('S'   :  open shell in dir )",
-            "('P'   :  pin )"
+            "('P'   :  pin )",
+            "('i'   :  file info )"
+
         ]),
         Row::new([
             "('a'   : add file)",
@@ -1070,6 +1236,7 @@ fn ui(
             "('w'   :  buffer up )",
             "('q'   :  quit )",
             "('u'   :  unpin )",
+            "('T'   :  toggle progress popup)"
         ]),
         Row::new([
             "('A'   : add dir)",
@@ -1080,8 +1247,7 @@ fn ui(
         ]),
         Row::new(["('r'   :  rename )", "","", "('/'  :  search )" , "('U'   :  remove pin )"]),
         Row::new(["('m'   :  change permissions )" , "" , "" ,  "('N'   :  prev search)" , "('c'   :  change category in pins)"]),
-        Row::new(["" , "" , "", "('n'   :  next search)",  ]),
-        Row::new(["" , "" , "", "('T'   :  toggle progress popup)", ]),
+        Row::new(["" , "" , "", "('n'   :  next search)"]),
     ];
     let mut buffer: Vec<String> = Vec::new();
     let curr = &selections.1; // the curr dir
@@ -1233,6 +1399,11 @@ fn ui(
         render_pins_popup(frame, category_manager, category_state);
     }
 
+    // Render file info popup if enabled
+    if *show_file_info_popup {
+        render_file_info_popup(frame, selections);
+    }
+
     // Render paste progress if toggled
     if let Ok(progress) = paste_progress.lock() {
         if *show_progress_popup {
@@ -1328,12 +1499,13 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
     let mut sel = TableState::default(); // selection state of curr dir
 
     // Define the widths of the columns
-    let widths: &[Constraint; 5] = &[
-        Constraint::Percentage(20),
-        Constraint::Percentage(20),
-        Constraint::Percentage(20),
-        Constraint::Percentage(20),
-        Constraint::Percentage(20),
+    let widths: &[Constraint; 6] = &[
+        Constraint::Percentage(16),
+        Constraint::Percentage(16),
+        Constraint::Percentage(16),
+        Constraint::Percentage(16),
+        Constraint::Percentage(16),
+        Constraint::Percentage(16),
     ];
 
     // Render the table with the provided data
@@ -1342,7 +1514,7 @@ fn render_table(frame: &mut Frame, rect: Rect, data: &Vec<Row>) {
             .style(Style::new().blue().fg(Color::White).bg(Color::Black))
             .block(Block::default().title("commands").borders(Borders::ALL))
             .header(
-                Row::new(vec!["alter", "ccp", "buffer", "controls" , "pin"]).style(
+                Row::new(vec!["alter", "ccp", "buffer", "controls" , "pin" , "info"]).style(
                     Style::default()
                         .fg(Color::Yellow)
                         .add_modifier(Modifier::BOLD),
@@ -1498,6 +1670,50 @@ fn render_pins_popup(frame: &mut Frame, category_manager: &CategoryManager, cate
             .block(Block::default().borders(Borders::TOP))
             .style(Style::default().fg(Color::Yellow)),
         help_area[1],
+    );
+}
+
+fn render_file_info_popup(frame: &mut Frame, selections: &mut (usize, &mut dirs::Directory, usize, Entry)) {
+    let popup_area = centered_rect(70, 80, frame.area());
+    
+    // Clear the area first
+    frame.render_widget(Clear, popup_area);
+    
+    // Get file information
+    let file_info = get_file_info(&selections.3);
+    
+    // Create list items from file info
+    let info_items: Vec<ListItem> = file_info
+        .iter()
+        .map(|info| ListItem::new(Text::from(info.as_str())))
+        .collect();
+    
+    // Create the main list
+    let info_list = List::new(info_items)
+        .block(
+            Block::default()
+                .title("File Information")
+                .borders(Borders::ALL)
+                .style(Style::default().fg(Color::Cyan))
+        )
+        .style(Style::default().fg(Color::White).bg(Color::Black));
+    
+    // Create help text
+    let help_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Min(0), Constraint::Length(3)])
+        .split(popup_area);
+    
+    // Render the file info list
+    frame.render_widget(info_list, help_layout[0]);
+    
+    // Render help text
+    frame.render_widget(
+        Paragraph::new("Press 'i' or 'Esc' to close")
+            .block(Block::default().borders(Borders::TOP))
+            .style(Style::default().fg(Color::Yellow))
+            .alignment(Alignment::Center),
+        help_layout[1],
     );
 }
 

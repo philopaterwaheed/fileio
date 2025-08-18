@@ -86,3 +86,15 @@ sudo mv fileio /bin
     
     The progress window can be manually opened/closed with the 'T' key, and automatically appears during paste operations.
     This ensures smooth navigation while large copy/move operations are running in the background.
+
+- ### File Information Popup
+    Get detailed information about any file or directory by pressing 'i' when the item is selected. The popup displays:
+    - **File/Directory name and full path**
+    - **Size** (for files, with human-readable format like KB, MB, GB)
+    - **Permissions** (octal format like 755, 644)
+    - **Timestamps**: Creation, modification, and access times
+    - **Unix metadata**: Inode number, device ID, hard links count, UID/GID
+    - **File type information**: whether it's a file, directory, symlink, or read-only
+    - **Directory contents count** (for directories)
+    
+    Press 'i' again or 'Esc' to close the information popup. This feature helps you quickly inspect file properties without leaving the file manager.
