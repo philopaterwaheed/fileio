@@ -261,6 +261,13 @@ struct PasteProgress {
     bytes_done: u64,
     total_bytes: u64,
     is_active: bool,
+    operation_id: usize,
+}
+
+#[derive(Debug, Clone)]
+struct PasteManager {
+    operations: HashMap<usize, PasteProgress>,
+    next_id: usize,
 }
 
 struct ImagePreview {
@@ -325,7 +332,45 @@ impl Default for PasteProgress {
             bytes_done: 0,
             total_bytes: 0,
             is_active: false,
+            operation_id: 0,
         }
+    }
+}
+
+impl PasteManager {
+    fn new() -> Self {
+        Self {
+            operations: HashMap::new(),
+            next_id: 1,
+        }
+    }
+    
+    fn start_operation(&mut self) -> usize {
+        let id = self.next_id;
+        self.next_id += 1;
+        
+        let mut progress = PasteProgress::default();
+        progress.operation_id = id;
+        progress.is_active = true;
+        
+        self.operations.insert(id, progress);
+        id
+    }
+    
+    fn remove_operation(&mut self, id: usize) {
+        self.operations.remove(&id);
+    }
+    
+    fn has_active_operations(&self) -> bool {
+        self.operations.values().any(|op| op.is_active)
+    }
+    
+    fn get_operation(&self, id: usize) -> Option<&PasteProgress> {
+        self.operations.get(&id)
+    }
+    
+    fn get_operation_mut(&mut self, id: usize) -> Option<&mut PasteProgress> {
+        self.operations.get_mut(&id)
     }
 }
 
@@ -456,7 +501,7 @@ fn main() -> io::Result<()> {
     let mut show_popups: (bool, bool, bool) = (false, false, false);
     // pins , progress , info 
 
-    let paste_progress = Arc::new(Mutex::new(PasteProgress::default()));
+    let paste_manager = Arc::new(Mutex::new(PasteManager::new()));
     let mut image_preview = ImagePreview::new(); // Add image preview state
 
     enable_raw_mode()?;
@@ -466,7 +511,7 @@ fn main() -> io::Result<()> {
     let mut should_quit = false;
     update(selections, contains, &mut image_preview);
     while !should_quit {
-        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_popups, &paste_progress, &mut image_preview))?;
+        terminal.draw(|f| ui(f, selections, contains, &mut input_state, &mut buffer_state, &mut category_manager, &mut category_state, &mut show_popups, &paste_manager, &mut image_preview))?;
         should_quit = handle_events(
             selections,
             contains,
@@ -476,7 +521,7 @@ fn main() -> io::Result<()> {
             &mut category_manager,
             &mut category_state,
             &mut show_popups,
-            &paste_progress,
+            &paste_manager,
             &mut image_preview,
         )?;
         unsafe {
@@ -506,7 +551,7 @@ fn handle_events(
     category_manager: &mut CategoryManager,
     category_state: &mut CategoryState,
     show_popups: &mut (bool, bool, bool),
-    paste_progress: &Arc<Mutex<PasteProgress>>,
+    paste_manager: &Arc<Mutex<PasteManager>>,
     image_preview: &mut ImagePreview,
 ) -> io::Result<bool> {
     if event::poll(std::time::Duration::from_millis(50))? {
@@ -602,7 +647,7 @@ fn handle_events(
                 //if the user not trying to input text
                 if key.kind == event::KeyEventKind::Press && key.code == KeyCode::Char('q') {
                     //quit
-                    if !paste_progress.lock().unwrap().is_active {
+                    if !paste_manager.lock().unwrap().has_active_operations() {
                         return Ok(true);
                     }
                     else if !(show_popups.1) {
@@ -856,7 +901,11 @@ fn handle_events(
                     // pastes buffer the Entry
                     if !buffer_state.1.is_empty() {
                         show_popups.1 = true; // show progress popup
-                        start_background_paste(buffer_state.1.clone(), selections.1.path.clone(), paste_progress.clone());
+                        let operation_id = {
+                            let mut manager = paste_manager.lock().unwrap();
+                            manager.start_operation()
+                        };
+                        start_background_paste(buffer_state.1.clone(), selections.1.path.clone(), paste_manager.clone(), operation_id);
                         buffer_state.1.clear(); //clear the buffer
                     }
                 }
@@ -1240,7 +1289,7 @@ fn ui(
     category_manager: &mut CategoryManager,
     category_state: &mut CategoryState,
     show_popups: &mut (bool, bool, bool),
-    paste_progress: &Arc<Mutex<PasteProgress>>,
+    paste_manager: &Arc<Mutex<PasteManager>>,
     image_preview: &mut ImagePreview,
 ) {
     let commands = vec![
@@ -1428,9 +1477,9 @@ fn ui(
     }
 
     // Render paste progress if toggled
-    if let Ok(progress) = paste_progress.lock() {
+    if let Ok(manager) = paste_manager.lock() {
         if show_popups.1 {
-            render_paste_progress(frame, &progress);
+            render_paste_progress(frame, &manager);
         }
     }
 }
@@ -1750,7 +1799,8 @@ fn open_in_default(path : &Path) -> Result<(), Box<dyn std::error::Error>>{
 fn start_background_paste(
     buffer: Vec<(Entry, bool)>,
     dest_dir: PathBuf,
-    progress: Arc<Mutex<PasteProgress>>,
+    paste_manager: Arc<Mutex<PasteManager>>,
+    operation_id: usize,
 ) {
     thread::spawn(move || {
         // Calculate total work
@@ -1777,12 +1827,15 @@ fn start_background_paste(
 
         // Initialize progress
         {
-            let mut prog = progress.lock().unwrap();
-            prog.total_files = total_files;
-            prog.total_bytes = total_bytes;
-            prog.files_done = 0;
-            prog.bytes_done = 0;
-            prog.is_active = true;
+            if let Ok(mut manager) = paste_manager.lock() {
+                if let Some(progress) = manager.get_operation_mut(operation_id) {
+                    progress.total_files = total_files;
+                    progress.total_bytes = total_bytes;
+                    progress.files_done = 0;
+                    progress.bytes_done = 0;
+                    progress.is_active = true;
+                }
+            }
         }
 
         // Process each entry
@@ -1791,30 +1844,30 @@ fn start_background_paste(
                 Entry::dir(d) => {
                     if operation {
                         // Move directory
-                        let _ = background_move_dir(&d, &dest_dir, &progress);
+                        let _ = background_move_dir(&d, &dest_dir, &paste_manager, operation_id);
                     } else {
                         // Copy directory
-                        let _ = background_copy_dir(&d, &dest_dir, &progress);
+                        let _ = background_copy_dir(&d, &dest_dir, &paste_manager, operation_id);
                     }
                 }
                 Entry::file(f) => {
                     if operation {
                         // Move file
-                        let _ = background_move_file(&f, &dest_dir, &progress);
+                        let _ = background_move_file(&f, &dest_dir, &paste_manager, operation_id);
                     } else {
                         // Copy file
-                        let _ = background_copy_file(&f, &dest_dir, &progress);
+                        let _ = background_copy_file(&f, &dest_dir, &paste_manager, operation_id);
                     }
                 }
                 Entry::None => {}
             }
         }
 
-        // Mark as complete
+        // Mark as complete and remove from manager
         {
-            let mut prog = progress.lock().unwrap();
-            prog.is_active = false;
-            prog.current_file.clear();
+            if let Ok(mut manager) = paste_manager.lock() {
+                manager.remove_operation(operation_id);
+            }
         }
     });
 }
@@ -1845,14 +1898,18 @@ fn count_dir_contents(path: &Path) -> io::Result<(usize, u64)> {
 fn background_copy_file(
     file: &files::File,
     dest_dir: &PathBuf,
-    progress: &Arc<Mutex<PasteProgress>>,
+    paste_manager: &Arc<Mutex<PasteManager>>,
+    operation_id: usize,
 ) -> Result<(), io::Error> {
     let dest_path = dest_dir.join(&file.name);
     
     // Update progress with current file
     {
-        let mut prog = progress.lock().unwrap();
-        prog.current_file = file.name.clone();
+        if let Ok(mut manager) = paste_manager.lock() {
+            if let Some(progress) = manager.get_operation_mut(operation_id) {
+                progress.current_file = file.name.clone();
+            }
+        }
     }
 
     // Copy file with progress tracking
@@ -1871,15 +1928,21 @@ fn background_copy_file(
         
         // Update progress
         {
-            let mut prog = progress.lock().unwrap();
-            prog.bytes_done += bytes_read as u64;
+            if let Ok(mut manager) = paste_manager.lock() {
+                if let Some(progress) = manager.get_operation_mut(operation_id) {
+                    progress.bytes_done += bytes_read as u64;
+                }
+            }
         }
     }
 
     // Update file completion
     {
-        let mut prog = progress.lock().unwrap();
-        prog.files_done += 1;
+        if let Ok(mut manager) = paste_manager.lock() {
+            if let Some(progress) = manager.get_operation_mut(operation_id) {
+                progress.files_done += 1;
+            }
+        }
     }
 
     Ok(())
@@ -1888,30 +1951,37 @@ fn background_copy_file(
 fn background_move_file(
     file: &files::File,
     dest_dir: &PathBuf,
-    progress: &Arc<Mutex<PasteProgress>>,
+    paste_manager: &Arc<Mutex<PasteManager>>,
+    operation_id: usize,
 ) -> Result<(), io::Error> {
     let dest_path = dest_dir.join(&file.name);
     
     // Update progress with current file
     {
-        let mut prog = progress.lock().unwrap();
-        prog.current_file = file.name.clone();
+        if let Ok(mut manager) = paste_manager.lock() {
+            if let Some(progress) = manager.get_operation_mut(operation_id) {
+                progress.current_file = file.name.clone();
+            }
+        }
     }
 
     // Try to rename first (fast move within same filesystem)
     match fs::rename(&file.path, &dest_path) {
         Ok(_) => {
             // Update progress
-            let mut prog = progress.lock().unwrap();
-            prog.files_done += 1;
-            if let Ok(metadata) = dest_path.metadata() {
-                prog.bytes_done += metadata.len();
+            if let Ok(mut manager) = paste_manager.lock() {
+                if let Some(progress) = manager.get_operation_mut(operation_id) {
+                    progress.files_done += 1;
+                    if let Ok(metadata) = dest_path.metadata() {
+                        progress.bytes_done += metadata.len();
+                    }
+                }
             }
             Ok(())
         }
         Err(_) => {
             // Fall back to copy + delete
-            background_copy_file(file, dest_dir, progress)?;
+            background_copy_file(file, dest_dir, paste_manager, operation_id)?;
             fs::remove_file(&file.path)?;
             Ok(())
         }
@@ -1921,7 +1991,8 @@ fn background_move_file(
 fn background_copy_dir(
     source_dir: &dirs::Directory,
     dest_dir: &PathBuf,
-    progress: &Arc<Mutex<PasteProgress>>,
+    paste_manager: &Arc<Mutex<PasteManager>>,
+    operation_id: usize,
 ) -> Result<(), io::Error> {
     let new_dir_path = dest_dir.join(&source_dir.name);
     fs::create_dir_all(&new_dir_path)?;
@@ -1932,11 +2003,11 @@ fn background_copy_dir(
         
         if path.is_file() {
             if let Ok(file) = files::File::new(&path) {
-                background_copy_file(&file, &new_dir_path, progress)?;
+                background_copy_file(&file, &new_dir_path, paste_manager, operation_id)?;
             }
         } else if path.is_dir() {
             if let Ok(dir) = dirs::Directory::new(&path) {
-                background_copy_dir(&dir, &new_dir_path, progress)?;
+                background_copy_dir(&dir, &new_dir_path, paste_manager, operation_id)?;
             }
         }
     }
@@ -1947,7 +2018,8 @@ fn background_copy_dir(
 fn background_move_dir(
     source_dir: &dirs::Directory,
     dest_dir: &PathBuf,
-    progress: &Arc<Mutex<PasteProgress>>,
+    paste_manager: &Arc<Mutex<PasteManager>>,
+    operation_id: usize,
 ) -> Result<(), io::Error> {
     let new_dir_path = dest_dir.join(&source_dir.name);
     
@@ -1961,33 +2033,38 @@ fn background_move_dir(
         Ok(_) => {
             // Update progress for all files in the moved directory
             if let Ok((files, bytes)) = count_dir_contents(&new_dir_path) {
-                let mut prog = progress.lock().unwrap();
-                prog.files_done += files;
-                prog.bytes_done += bytes;
+                if let Ok(mut manager) = paste_manager.lock() {
+                    if let Some(progress) = manager.get_operation_mut(operation_id) {
+                        progress.files_done += files;
+                        progress.bytes_done += bytes;
+                    }
+                }
             }
             Ok(())
         }
         Err(_) => {
             // Fall back to copy + delete
-            background_copy_dir(source_dir, dest_dir, progress)?;
+            background_copy_dir(source_dir, dest_dir, paste_manager, operation_id)?;
             fs::remove_dir_all(&source_dir.path)?;
             Ok(())
         }
     }
 }
 
-fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
+fn render_paste_progress(frame: &mut Frame, paste_manager: &PasteManager) {
     // Create a progress popup area
-    let progress_area = centered_rect(70, 25, frame.area());
+    let progress_area = centered_rect(70, 30, frame.area());
     
     // Clear the area first
     frame.render_widget(Clear, progress_area);
     
-    // Check if operation is active
-    if !progress.is_active && progress.total_files == 0 {
+    let operations: Vec<&PasteProgress> = paste_manager.operations.values().collect();
+    
+    // Check if any operations are active
+    if operations.is_empty() {
         frame.render_widget(
-            Paragraph::new("No paste operation in progress.\n\nPress 'p' to start pasting files from buffer.\nPress 'T' to close this window.")
-                .block(create_popup_block("Paste Progress (No Operation)", true))
+            Paragraph::new("No paste operations in progress.\n\nPress 'p' to start pasting files from buffer.\nPress 'T' to close this window.")
+                .block(create_popup_block("Paste Progress (No Operations)", true))
                 .style(create_popup_style())
                 .alignment(Alignment::Center)
                 .wrap(Wrap { trim: true }),
@@ -1996,6 +2073,75 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
         return;
     }
     
+    let active_ops: Vec<&PasteProgress> = operations.iter().filter(|op| op.is_active).cloned().collect();
+    let completed_ops = operations.len() - active_ops.len();
+    
+    let title = if active_ops.is_empty() {
+        format!("Paste Operations (All {} Completed)", operations.len())
+    } else {
+        format!("Paste Operations ({} Active, {} Completed)", active_ops.len(), completed_ops)
+    };
+    
+    // Create layout for multiple operations
+    let num_visible_ops = std::cmp::min(operations.len(), 3); // Show max 3 operations
+    let mut constraints = vec![Constraint::Length(2)]; // Title
+    
+    for _ in 0..num_visible_ops {
+        constraints.push(Constraint::Length(6)); // Each operation takes 6 lines
+    }
+    
+    if operations.len() > 3 {
+        constraints.push(Constraint::Length(2)); // "... and X more" message
+    }
+    
+    constraints.push(Constraint::Min(0)); // Instructions
+    
+    let progress_layout = Layout::new(Direction::Vertical, constraints).split(progress_area);
+    
+    // Title
+    frame.render_widget(
+        Paragraph::new("")
+            .block(create_popup_block(&title, true))
+            .style(create_popup_style()),
+        progress_layout[0],
+    );
+    
+    // Show first 3 operations
+    for (i, operation) in operations.iter().take(3).enumerate() {
+        let op_area = progress_layout[i + 1];
+        render_single_operation(frame, operation, op_area);
+    }
+    
+    // Show "... and X more" if there are more than 3 operations
+    if operations.len() > 3 {
+        let remaining = operations.len() - 3;
+        frame.render_widget(
+            Paragraph::new(format!("... and {} more operations", remaining))
+                .style(create_popup_style())
+                .alignment(Alignment::Center),
+            progress_layout[4],
+        );
+    }
+    
+    // Instructions
+    let instructions_idx = if operations.len() > 3 { 5 } else { 4 };
+    let instructions = if active_ops.is_empty() {
+        "All operations completed! Press 'Esc' or 'T' to close"
+    } else {
+        "Press 'Esc' or 'T' to close this window"
+    };
+    
+    if instructions_idx < progress_layout.len() {
+        frame.render_widget(
+            Paragraph::new(instructions)
+                .style(create_help_text_style())
+                .alignment(Alignment::Center),
+            progress_layout[instructions_idx],
+        );
+    }
+}
+
+fn render_single_operation(frame: &mut Frame, progress: &PasteProgress, area: Rect) {
     // Calculate progress percentages
     let file_progress = if progress.total_files > 0 {
         (progress.files_done as f64 / progress.total_files as f64 * 100.0) as u16
@@ -2008,87 +2154,50 @@ fn render_paste_progress(frame: &mut Frame, progress: &PasteProgress) {
     } else {
         0
     };
-
-    // Create layout for progress bars
-    let progress_layout = Layout::new(
+    
+    let op_layout = Layout::new(
         Direction::Vertical,
         [
-            Constraint::Length(3), // Current file
-            Constraint::Length(3), // File progress bar
-            Constraint::Length(3), // Byte progress bar
-            Constraint::Min(0), // Status/instructions
+            Constraint::Length(2), // Current file
+            Constraint::Length(2), // File progress
+            Constraint::Length(2), // Byte progress
         ],
-    )
-    .split(progress_area);
-
+    ).split(area);
+    
     // Current file info
     let current_file_text = if progress.current_file.is_empty() {
         if progress.is_active {
-            "Preparing...".to_string()
+            format!("Operation #{}: Preparing...", progress.operation_id)
         } else {
-            "Operation completed".to_string()
+            format!("Operation #{}: Completed", progress.operation_id)
         }
     } else {
-        format!("Processing: {}", progress.current_file)
-    };
-    
-    let title = if progress.is_active {
-        "Paste Operation (In Progress)"
-    } else {
-        "Paste Operation (Completed)"
+        format!("Op #{}: {}", progress.operation_id, progress.current_file)
     };
     
     frame.render_widget(
         Paragraph::new(current_file_text)
-            .block(create_popup_block(title, true))
-            .style(create_popup_style())
-            .alignment(Alignment::Center),
-        progress_layout[0],
+            .style(if progress.is_active { create_popup_style() } else { Style::default().fg(Color::DarkGray) })
+            .alignment(Alignment::Left),
+        op_layout[0],
     );
-
+    
     // File progress bar
     frame.render_widget(
         Gauge::default()
-            .block(create_popup_block(&format!("Files: {}/{}", progress.files_done, progress.total_files), true))
-            .gauge_style(
-                Style::default()
-                    .fg(POPUP_HIGHLIGHT_COLOR)
-                    .bg(POPUP_BACKGROUND_COLOR)
-            )
+            .gauge_style(Style::default().fg(if progress.is_active { POPUP_HIGHLIGHT_COLOR } else { Color::DarkGray }))
             .percent(file_progress)
-            .label(format!("{}%", file_progress)),
-        progress_layout[1],
-    );
-
-    // Byte progress bar
-    let bytes_text = format!(
-        "Data: {}/{}",
-        format_bytes(progress.bytes_done),
-        format_bytes(progress.total_bytes)
+            .label(format!("Files: {}/{} ({}%)", progress.files_done, progress.total_files, file_progress)),
+        op_layout[1],
     );
     
+    // Byte progress bar
     frame.render_widget(
         Gauge::default()
-            .block(create_popup_block(&bytes_text, true))
-            .gauge_style(Style::default().fg(POPUP_HIGHLIGHT_COLOR))
+            .gauge_style(Style::default().fg(if progress.is_active { POPUP_HIGHLIGHT_COLOR } else { Color::DarkGray }))
             .percent(byte_progress)
-            .label(format!("{}%", byte_progress)),
-        progress_layout[2],
-    );
-
-    // Instructions
-    let instructions = if progress.is_active {
-        "Press 'Esc' or 'T' to close this window"
-    } else {
-        "Operation completed! Press 'Esc' or 'T' to close"
-    };
-    
-    frame.render_widget(
-        Paragraph::new(instructions)
-            .block(create_popup_block("Instructions", true))
-            .style(create_help_text_style())
-            .alignment(Alignment::Center),
-        progress_layout[3],
+            .label(format!("Data: {}/{} ({}%)", format_bytes(progress.bytes_done), format_bytes(progress.total_bytes), byte_progress)),
+        op_layout[2],
     );
 }
 
