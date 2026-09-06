@@ -8,7 +8,7 @@ use crossterm::{
     ExecutableCommand,
 };
 use ratatui::{prelude::*, widgets::*};
-use ratatui_image::{picker::Picker, StatefulImage, protocol::StatefulProtocol};
+use ratatui_image::{picker::{Picker, ProtocolType}, StatefulImage, protocol::StatefulProtocol};
 use std::{fs};
 use std::io::{self, Write, BufReader, BufRead, Read};
 use std::path::{Path, PathBuf};
@@ -273,20 +273,31 @@ struct PasteManager {
 struct ImagePreview {
     image: Option<StatefulProtocol>,
     image_path: Option<PathBuf>,
-    picker: Picker,
+    picker: Option<Picker>,
 }
 
 impl ImagePreview {
     fn new() -> Self {
-        // Try to use proper picker that detects font size and protocol
+        // Never probe stdio unless env already says this terminal can draw images.
+        // from_query_stdio blocks waiting for replies and stalls terminals like st.
+        if !terminal_supports_image_preview() {
+            return Self {
+                image: None,
+                image_path: None,
+                picker: None,
+            };
+        }
+
         let picker = match Picker::from_query_stdio() {
             Ok(picker) => picker,
-            Err(_) => {
-                // Fall back to fixed font size if query fails
-                Picker::from_fontsize((8, 12))
-            }
+            Err(_) => Picker::from_fontsize((8, 12)),
         };
-        
+        let picker = matches!(
+            picker.protocol_type(),
+            ProtocolType::Kitty | ProtocolType::Sixel | ProtocolType::Iterm2
+        )
+        .then_some(picker);
+
         Self {
             image: None,
             picker,
@@ -295,25 +306,19 @@ impl ImagePreview {
     }
 
     fn load_image(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        if !is_image_file(path) {
+        if self.picker.is_none() || !is_image_file(path) {
             return Ok(());
         }
 
-        match image::ImageReader::open(path) {
-            Ok(reader) => {
-                match reader.decode() {
-                    Ok(dyn_img) => {
-                        let protocol = self.picker.new_resize_protocol(dyn_img);
-                        self.image = Some(protocol);
-                        self.image_path = Some(path.to_path_buf());
-                    }
-                    Err(_) => {
-                    }
-                }
-            }
-            Err(_) => {
-            }
-        }
+        let protocol = match image::ImageReader::open(path) {
+            Ok(reader) => match reader.decode() {
+                Ok(dyn_img) => self.picker.as_ref().unwrap().new_resize_protocol(dyn_img),
+                Err(_) => return Ok(()),
+            },
+            Err(_) => return Ok(()),
+        };
+        self.image = Some(protocol);
+        self.image_path = Some(path.to_path_buf());
         Ok(())
     }
 
@@ -502,10 +507,10 @@ fn main() -> io::Result<()> {
     // pins , progress , info 
 
     let paste_manager = Arc::new(Mutex::new(PasteManager::new()));
-    let mut image_preview = ImagePreview::new(); // Add image preview state
 
     enable_raw_mode()?;
     std::io::stdout().execute(EnterAlternateScreen)?;
+    let mut image_preview = ImagePreview::new();
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
 
     let mut should_quit = false;
@@ -2221,6 +2226,55 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{:.1} {}", size, UNITS[unit_index])
     }
+}
+
+fn terminal_supports_image_preview() -> bool {
+    let term = std::env::var("TERM").unwrap_or_default();
+
+    // Known terminals with no graphics protocol. Check before inherited
+    // KITTY_WINDOW_ID / similar, which st can pick up if launched from kitty.
+    if term == "st"
+        || term.starts_with("st-")
+        || term.contains("alacritty")
+        || term == "linux"
+        || term == "dumb"
+    {
+        return false;
+    }
+
+    if term.contains("kitty")
+        || term.contains("ghostty")
+        || term.contains("wezterm")
+        || term == "foot"
+        || term.starts_with("foot-")
+        || term.contains("mlterm")
+        || term.contains("rio")
+        || term.contains("sixel")
+    {
+        return true;
+    }
+
+    let nonempty = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
+    if nonempty("KITTY_WINDOW_ID")
+        || nonempty("GHOSTTY_RESOURCES_DIR")
+        || nonempty("WEZTERM_EXECUTABLE")
+        || nonempty("ITERM_SESSION_ID")
+    {
+        return true;
+    }
+
+    if let Ok(program) = std::env::var("TERM_PROGRAM") {
+        if program.contains("iTerm")
+            || program.contains("WezTerm")
+            || program.contains("ghostty")
+            || program.contains("kitty")
+            || program.contains("rio")
+        {
+            return true;
+        }
+    }
+
+    std::env::var("LC_TERMINAL").is_ok_and(|lc| lc.contains("iTerm"))
 }
 
 fn is_image_file(path: &Path) -> bool {
